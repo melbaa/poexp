@@ -8,11 +8,14 @@ import requests
 txtpath = r"C:\users\melba\desktop\desktop\poerank.txt"
 account = "emfan"
 #league = "Abyss"
-league = "Bestiary"
+#league = "Bestiary"
+#league = "Incursion"
+league = "Delve"
 
-sleep = 10
+sleep = 15  # sec
 
 api_url = "http://api.pathofexile.com/ladders/{league}?accountName={account}"
+prev_next_url = "http://api.pathofexile.com/ladders/{league}?limit=3&offset={offset}"
 
 
 MAX_QUEUE_LEN = 2000
@@ -24,6 +27,9 @@ time_measures_per_min = [
 ]
 
 xp_per_level = {
+    90: 1934009687,
+    91: 2094900291,
+    92: 2268549086,
     93: 2455921256,
     94: 2876116901,
     95: 3111280300,
@@ -72,6 +78,18 @@ def write_file(path, txt):
     with open(path, 'w') as f:
         f.write(txt)
 
+def get_prev_next_xp(rank):
+    # ignores the case when leading, cuz never leading :)
+    url = prev_next_url.format(league=league, account=account, offset=rank-2)
+    resp = requests.get(url).json()
+    entries = resp['entries']
+    prev_xp = entries[0]['character']['experience']
+    my_xp = entries[1]['character']['experience']
+    next_xp = entries[2]['character']['experience']
+
+    prev_xp_diff = (prev_xp - my_xp)//1000  # in K
+    next_xp_diff = (my_xp - next_xp)//1000
+    return prev_xp_diff, next_xp_diff
 
 while True:
     try:
@@ -79,19 +97,16 @@ while True:
         resp = requests.get(url)
         j = resp.json()
 
-        rank = 'n/a'
-        level = 'n/a'
-        experience = 'n/a'
-        hours_remaining = 0
-        samples = 0
-
         entries = j['entries']
 
         if len(entries):
+            fstentry = entries[0]
+            rank = fstentry['rank']
+            level = fstentry['character']['level']
+            experience = fstentry['character']['experience']
 
-            rank = entries[0]['rank']
-            level = j['character']['level']
-            experience = j['character']['experience']
+            prev_xp_diff, next_xp_diff = get_prev_next_xp(rank)
+            xpdiff_desc = 'rank up xp: -{prev_xp_diff}K rank down xp: +{next_xp_diff}K'.format(prev_xp_diff=prev_xp_diff, next_xp_diff=next_xp_diff)
 
             time_now = time.time()
             timestr = time.strftime('%Y/%m/%d %H:%M:%S', time.localtime())
@@ -108,8 +123,10 @@ while True:
             samples = [len(time_measures) for time_measures, _ in time_measures_per_min]
             xph_minutes_desc = 'xph (' +  '/'.join([str(minutes) for _, minutes in time_measures_per_min]) + ' min)'  # eg xph (5/10/15 min)
             print(timestr, 'rank', rank, 'level', level, 'xp', pretty_xp, xph_minutes_desc, xph, 'hours to level', hours_remaining, 'samples', samples)
+            print(xpdiff_desc)
 
-            txt_fmt = 'rank: {rank} level: {level} experience: {experience} {xph_minutes_desc}: {xph} hours to level: {hours_remaining}'
+            txt_fmt = 'rank: {rank} level: {level} experience: {experience}M {xph_minutes_desc}: {xph} hours to level: {hours_remaining}'
+            txt_fmt += '\n' + xpdiff_desc
             txt = txt_fmt.format(rank=rank, level=level, experience=pretty_xp, xph_minutes_desc=xph_minutes_desc, xph=xph, hours_remaining=hours_remaining)
             write_file(txtpath, txt)
         else:
