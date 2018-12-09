@@ -1,21 +1,27 @@
 import time
 import traceback
 import collections
+import json
 
 import requests
-
+import colorama
+import win32api
+import win32gui
 
 txtpath = r"C:\users\melba\desktop\desktop\poerank.txt"
 account = "emfan"
 #league = "Abyss"
 #league = "Bestiary"
 #league = "Incursion"
-league = "Delve"
+#league = "Delve"
+league = "Betrayal"
 
 sleep = 15  # sec
 
 api_url = "http://api.pathofexile.com/ladders/{league}?accountName={account}"
 prev_next_url = "http://api.pathofexile.com/ladders/{league}?limit=3&offset={offset}"
+
+stash_url = "https://www.pathofexile.com/character-window/get-stash-items?accountName={account}&tabIndex={tabindex}&league={league}&tabs={tabs}"
 
 
 MAX_QUEUE_LEN = 2000
@@ -91,7 +97,92 @@ def get_prev_next_xp(rank):
     next_xp_diff = (my_xp - next_xp)//1000
     return prev_xp_diff, next_xp_diff
 
-while True:
+def find_chaos_recipe_needed(POESESSID):
+    url = stash_url.format(league=league, account=account, tabindex=2, tabs=0)
+    resp = requests.get(url, cookies={'POESESSID': POESESSID})
+    j = resp.json()
+
+    counts = {
+            'helmet': 0,
+            'boots': 0,
+            'gloves': 0,
+            'ring': 0,
+            'amulet': 0,
+            'belt': 0,
+            'weapons': 0,
+            'chest': 0,
+    }
+    unknown = []
+    identified = []
+    items = j['items']
+    for item in items:
+        if item['identified']:
+            identified.append(item['typeLine'])
+            continue
+        category = list(item['category'].keys())[0]
+        if category == 'weapons':
+            counts['weapons'] += 1
+        elif category in {'accessories', 'armour'}:
+            item_class = item['category'][category][0]
+            counts[item_class] += 1
+        else:
+            unknown.append(item['typeline'])
+
+    need = []
+    for name, count in counts.items():
+        if name == 'ring' and count < 2:
+            need.append(name)
+        elif count == 0:
+            need.append(name)
+
+    return need, unknown, identified, counts
+
+def color_chaos_recipe(POESESSID):
+    # broken with powershell, works with default terminal or conemu
+    # not enough colors
+    f = colorama.Fore
+    b = colorama.Back
+    s = colorama.Style
+    colors = {
+        'helmet': f.BLUE,
+        'boots': f.CYAN,
+        'gloves': f.YELLOW,
+        'ring': f.MAGENTA,
+        'amulet': f.GREEN,
+        'belt': f.GREEN,
+        'weapons': f.RED,
+        'chest': f.RED,
+    }
+    need, unknown, identified, counts = find_chaos_recipe_needed(POESESSID)
+    need_color = []
+    for item in need:
+        if item in colors:
+            item = colors[item] + item + s.RESET_ALL
+        need_color.append(item)
+    return 'need:{}, unk:{}, id:{} | r:{} a:{} b:{}'.format(', '.join(need_color), unknown, identified, counts['ring'], counts['amulet'], counts['belt'])
+
+
+def find_poe():
+
+    def callback(hwnd, hwnds):
+        hwnds.append(hwnd)
+        return True
+
+    found = False
+    hwnds = []
+    win32gui.EnumWindows(callback, hwnds)
+    for h in hwnds:
+        title = win32gui.GetWindowText(h).lower()
+        if 'exile' in title:
+            found = True
+
+    return found
+
+
+
+
+def main2(conf):
+    POESESSID = conf['poesessid']
     try:
         url = api_url.format(league=league, account=account)
         resp = requests.get(url)
@@ -107,6 +198,8 @@ while True:
 
             prev_xp_diff, next_xp_diff = get_prev_next_xp(rank)
             xpdiff_desc = 'rank up xp: -{prev_xp_diff}K rank down xp: +{next_xp_diff}K'.format(prev_xp_diff=prev_xp_diff, next_xp_diff=next_xp_diff)
+
+            chaos_recipe_txt = color_chaos_recipe(POESESSID)
 
             time_now = time.time()
             timestr = time.strftime('%Y/%m/%d %H:%M:%S', time.localtime())
@@ -124,6 +217,7 @@ while True:
             xph_minutes_desc = 'xph (' +  '/'.join([str(minutes) for _, minutes in time_measures_per_min]) + ' min)'  # eg xph (5/10/15 min)
             print(timestr, 'rank', rank, 'level', level, 'xp', pretty_xp, xph_minutes_desc, xph, 'hours to level', hours_remaining, 'samples', samples)
             print(xpdiff_desc)
+            print(chaos_recipe_txt)
 
             txt_fmt = 'rank: {rank} level: {level} experience: {experience}M {xph_minutes_desc}: {xph} hours to level: {hours_remaining}'
             txt_fmt += '\n' + xpdiff_desc
@@ -140,4 +234,17 @@ while True:
 
 
 
-    time.sleep(sleep)
+def main():
+    colorama.init()
+    with open('secrets.json', 'r') as f:
+        conf = json.loads(f.read())
+
+    while True:
+        if find_poe():
+            main2(conf)
+        else:
+            print('poe not found, skipping')
+        time.sleep(sleep)
+
+
+
