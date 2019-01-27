@@ -100,6 +100,9 @@ class Window(QWidget):
     def click_chaos_recipe(self):
         if not self.chaos_recipe:
             return
+        if not self.chaos_recipe.ready_count:
+            self.txt.setText('not enough items to complete recipe')
+            return
         time.sleep(1)  # give user a chance to stop using the mouse
         lib.move_ready_items_to_inventory(self.chaos_recipe)
 

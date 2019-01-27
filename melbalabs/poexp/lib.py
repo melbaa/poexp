@@ -73,7 +73,7 @@ ITEM_CHAOS_RECIPE_MULTIPLIER = {
 }
 
 
-ChaosRecipe = collections.namedtuple('ChaosRecipe', ['need', 'unknown', 'identified', 'counts', 'ready'])
+ChaosRecipe = collections.namedtuple('ChaosRecipe', ['need', 'unknown', 'identified', 'counts', 'ready', 'ready_count'])
 
 class LoginException(RuntimeError):
     pass
@@ -155,25 +155,29 @@ def move_ready_items_to_inventory(chaos_recipe):
 
     # a box is this many pixels wide
     # y 175 745
-    quad_tab_box_pixels = 23.75
+    quad_tab_box_pixels_x = 25
+    quad_tab_box_pixels_y = 25
     # quad tab inventory coords start in top left
     x_start = 20
     y_start = 176
 
-    y_end = y_start + quad_tab_box_pixels * num_boxes
+    y_end = y_start + quad_tab_box_pixels_y * num_boxes
+
+    if not chaos_recipe.ready_count:
+        print ('not enough items to complete recipe')
+        return
 
     for item_class in CHAOS_RECIPE_ITEM_CLASSES:
         for repeat in range(ITEM_CHAOS_RECIPE_MULTIPLIER.get(item_class, 1)):
             items = chaos_recipe.ready[item_class]
             item = items[repeat]
-            x = x_start + quad_tab_box_pixels * (item['x'] + 1)
-            y = y_start + quad_tab_box_pixels * (item['y'] + 1)
-            print('mouse move to', x, y, item['category'])
+            x = x_start + quad_tab_box_pixels_x * (item['x'])
+            y = y_start + quad_tab_box_pixels_y * (item['y'])
+            print('mouse move to', x, y, item['x'], item['y'], item['category'])
             pyautogui.moveTo(x, y)
             pyautogui.keyDown('ctrl')
             pyautogui.click()
             pyautogui.keyUp('ctrl')
-            #time.sleep(10)
 
 
 def find_chaos_recipe_needed(stash):
@@ -217,13 +221,13 @@ def find_chaos_recipe_needed(stash):
         adjusted_count = ready_count * ITEM_CHAOS_RECIPE_MULTIPLIER.get(k, 1)
         ready_items[k] = ready_items[k][:adjusted_count]
 
-    return ChaosRecipe(need, unknown, identified, counts, ready_items)
+    return ChaosRecipe(need, unknown, identified, counts, ready_items, ready_count)
 
 def format_chaos_recipe(chaos_recipe, colorize: bool):
     # broken with powershell, works with default terminal or conemu
     # not enough colors
 
-    need, unknown, identified, counts, ready_items = chaos_recipe
+    need, unknown, identified, counts, ready_items, ready_count = chaos_recipe
 
     need_output = []
     for item in need:
