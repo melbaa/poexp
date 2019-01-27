@@ -224,11 +224,12 @@ def format_chaos_recipe(chaos_recipe, colorize: bool):
     # not enough colors
 
     need, unknown, identified, counts, ready_items = chaos_recipe
-    need = []
+
+    need_output = []
     for item in need:
         if item in ITEM_COLORS_CLI and colorize:
             item = ITEM_COLORS_CLI[item] + item + colorama.Style.RESET_ALL
-        need.append(item)
+        need_output.append(item)
 
     adjusted_counts = {
         k: counts[k] / ITEM_CHAOS_RECIPE_MULTIPLIER.get(k, 1)
@@ -238,7 +239,7 @@ def format_chaos_recipe(chaos_recipe, colorize: bool):
 need:{}, unk:{}, id:{} | \
 r:{ring:g} a:{amulet:g} b:{belt:g} | \
 h:{helmet:g} b:{boots:g} g:{gloves:g} w:{weapons:g} c:{chest:g}'''.format(
-            ', '.join(need),
+            ', '.join(need_output),
             unknown,
             identified,
             **adjusted_counts,
