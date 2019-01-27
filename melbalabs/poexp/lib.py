@@ -9,12 +9,12 @@ import win32api
 import win32gui
 
 txtpath = r"C:\users\melba\desktop\desktop\poerank.txt"
-account = "emfan"
-#league = "Abyss"
-#league = "Bestiary"
-#league = "Incursion"
-#league = "Delve"
-league = "Betrayal"
+ACCOUNT = "emfan"
+#LEAGUE = "Abyss"
+#LEAGUE = "Bestiary"
+#LEAGUE = "Incursion"
+#LEAGUE = "Delve"
+LEAGUE = "Betrayal"
 
 SLEEP_SEC = 15  # sec
 
@@ -49,6 +49,20 @@ ChaosRecipe = collections.namedtuple('ChaosRecipe', ['need', 'unknown', 'identif
 
 class LoginException(RuntimeError):
     pass
+
+class PoeNotFoundException(RuntimeError):
+    pass
+
+class PoeStash:
+    def __init__(self, poesessid):
+        # note first tab in inventory
+        url = stash_url.format(league=LEAGUE, account=ACCOUNT, tabindex=0, tabs=0)
+        resp = requests.get(url, cookies={'POESESSID': poesessid})
+        j = resp.json()
+        if 'error' in j:
+            raise LoginException(j['error']['message'])
+        self.raw = j
+        self.items = j['items']
 
 def compute_xph(time_measures_per_min, time_now, level_now, experience_now):
     """
@@ -91,7 +105,7 @@ def write_file(path, txt):
 
 def get_prev_next_xp(rank):
     # ignores the case when leading, cuz never leading :)
-    url = prev_next_url.format(league=league, account=account, offset=rank-2)
+    url = prev_next_url.format(league=LEAGUE, account=ACCOUNT, offset=rank-2)
     resp = requests.get(url).json()
     entries = resp['entries']
     prev_xp = entries[0]['character']['experience']
@@ -102,15 +116,8 @@ def get_prev_next_xp(rank):
     next_xp_diff = (my_xp - next_xp)//1000
     return prev_xp_diff, next_xp_diff
 
-def find_chaos_recipe_needed(POESESSID):
+def find_chaos_recipe_needed(stash):
     HOWMANY = 5
-    # note first tab
-    url = stash_url.format(league=league, account=account, tabindex=0, tabs=0)
-    resp = requests.get(url, cookies={'POESESSID': POESESSID})
-    j = resp.json()
-    if 'error' in j:
-        raise LoginException(j['error']['message'])
-
     counts = {
             'helmet': 0,
             'boots': 0,
@@ -123,7 +130,7 @@ def find_chaos_recipe_needed(POESESSID):
     }
     unknown = []
     identified = []
-    items = j['items']
+    items = stash.items
     for item in items:
         if item['identified']:
             identified.append(item['typeLine'])
@@ -146,7 +153,7 @@ def find_chaos_recipe_needed(POESESSID):
 
     return ChaosRecipe(need, unknown, identified, counts)
 
-def color_chaos_recipe(POESESSID):
+def color_chaos_recipe(chaos_recipe):
     # broken with powershell, works with default terminal or conemu
     # not enough colors
     f = colorama.Fore
@@ -162,7 +169,6 @@ def color_chaos_recipe(POESESSID):
         'weapons': f.RED,
         'chest': f.RED,
     }
-    chaos_recipe = find_chaos_recipe_needed(POESESSID)
     need, unknown, identified, counts = chaos_recipe
     need_color = []
     for item in need:
@@ -182,7 +188,7 @@ def color_chaos_recipe(POESESSID):
             counts['weapons'],
             counts['chest'],
     )
-    return chaos_recipe_cli_txt, chaos_recipe
+    return chaos_recipe_cli_txt
 
 
 def find_poe():
@@ -208,69 +214,62 @@ def main2(conf):
     exceptions = []
     chaos_recipe = None
     POESESSID = conf['poesessid']
-    try:
-        url = api_url.format(league=league, account=account)
-        resp = requests.get(url)
-        j = resp.json()
+    url = api_url.format(league=LEAGUE, account=ACCOUNT)
+    resp = requests.get(url)
+    j = resp.json()
 
-        entries = j['entries']
+    entries = j['entries']
 
-        if len(entries):
-            fstentry = entries[0]
-            rank = fstentry['rank']
-            level = fstentry['character']['level']
-            experience = fstentry['character']['experience']
+    if len(entries):
+        fstentry = entries[0]
+        rank = fstentry['rank']
+        level = fstentry['character']['level']
+        experience = fstentry['character']['experience']
 
-            prev_xp_diff, next_xp_diff = get_prev_next_xp(rank)
-            xpdiff_desc = 'rank up xp: -{prev_xp_diff}K rank down xp: +{next_xp_diff}K'.format(prev_xp_diff=prev_xp_diff, next_xp_diff=next_xp_diff)
-
-
-            time_now = time.time()
-            timestr = time.strftime('%Y/%m/%d %H:%M:%S', time.localtime())
+        prev_xp_diff, next_xp_diff = get_prev_next_xp(rank)
+        xpdiff_desc = 'rank up xp: -{prev_xp_diff}K rank down xp: +{next_xp_diff}K'.format(prev_xp_diff=prev_xp_diff, next_xp_diff=next_xp_diff)
 
 
-            measure = (time_now, experience, level)
-
-            for time_measures, max_minutes in time_measures_per_min:
-                time_measures.append(measure)
-
-            (xph, hours_remaining) = compute_xph(time_measures_per_min, time_now, level, experience)
-
-            pretty_xp = round(experience/1000000, 2)
-            samples = [len(time_measures) for time_measures, _ in time_measures_per_min]
-            xph_minutes_desc = 'xph (' +  '/'.join([str(minutes) for _, minutes in time_measures_per_min]) + ' min)'  # eg xph (5/10/15 min)
-            print(timestr, 'rank', rank, 'level', level, 'xp', pretty_xp, xph_minutes_desc, xph, 'hours to level', hours_remaining, 'samples', samples)
-            print(xpdiff_desc)
-
-            txt_fmt = 'rank: {rank} level: {level} experience: {experience}M {xph_minutes_desc}: {xph} hours to level: {hours_remaining}'
-            txt_fmt += '\n' + xpdiff_desc
-            txt = txt_fmt.format(rank=rank, level=level, experience=pretty_xp, xph_minutes_desc=xph_minutes_desc, xph=xph, hours_remaining=hours_remaining)
-            write_file(txtpath, txt)
-        else:
-            print('rank unknown')
-            write_file(txtpath, 'rank unknown')
+        time_now = time.time()
+        timestr = time.strftime('%Y/%m/%d %H:%M:%S', time.localtime())
 
 
-        chaos_recipe_txt, chaos_recipe = color_chaos_recipe(POESESSID)
-        print(chaos_recipe_txt)
+        measure = (time_now, experience, level)
 
-    except Exception as e:
-        exc = traceback.format_exc()
-        print(exc)
-        print('exc ignored')
-        exceptions.append(exc)
-        exceptions.append('exc ignored')
-    return chaos_recipe, exceptions
+        for time_measures, max_minutes in time_measures_per_min:
+            time_measures.append(measure)
+
+        (xph, hours_remaining) = compute_xph(time_measures_per_min, time_now, level, experience)
+
+        pretty_xp = round(experience/1000000, 2)
+        samples = [len(time_measures) for time_measures, _ in time_measures_per_min]
+        xph_minutes_desc = 'xph (' +  '/'.join([str(minutes) for _, minutes in time_measures_per_min]) + ' min)'  # eg xph (5/10/15 min)
+        print(timestr, 'rank', rank, 'level', level, 'xp', pretty_xp, xph_minutes_desc, xph, 'hours to level', hours_remaining, 'samples', samples)
+        print(xpdiff_desc)
+
+        txt_fmt = 'rank: {rank} level: {level} experience: {experience}M {xph_minutes_desc}: {xph} hours to level: {hours_remaining}'
+        txt_fmt += '\n' + xpdiff_desc
+        txt = txt_fmt.format(rank=rank, level=level, experience=pretty_xp, xph_minutes_desc=xph_minutes_desc, xph=xph, hours_remaining=hours_remaining)
+        write_file(txtpath, txt)
+    else:
+        print('rank unknown')
+        write_file(txtpath, 'rank unknown')
+
+
+    stash = PoeStash(POESESSID)
+    chaos_recipe = find_chaos_recipe_needed(stash)
+    chaos_recipe_txt = color_chaos_recipe(chaos_recipe)
+    print(chaos_recipe_txt)
+
+    return chaos_recipe
 
 def run_once(conf):
-    chaos_recipe, exceptions = None, []
+    chaos_recipe = None
     if find_poe():
-        chaos_recipe, exceptions = main2(conf)
+        chaos_recipe = main2(conf)
     else:
-        exc = 'poe not found, skipping'
-        print(exc)
-        exceptions.append(exc)
-    return chaos_recipe, exceptions
+        raise PoeNotFoundException()
+    return chaos_recipe
 
 
 def read_conf():

@@ -1,3 +1,5 @@
+import traceback
+
 from PyQt5 import QtCore
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtWidgets import QHBoxLayout
@@ -60,12 +62,15 @@ class Window(QWidget):
         menu.exec_(event.globalPos())
 
     def update(self):
-        chaos_recipe, exc = self.update_fn()
-        msg = str(chaos_recipe)
-        if exc:
-            msg = str(exc)
+        try:
+            chaos_recipe = self.update_fn()
+            msg = str(chaos_recipe)
+        except lib.PoeNotFoundException as e:
+            msg = 'poe not found, nothing to do'
+        except Exception as e:
+            traceback.print_exc()
+            msg = 'exception occurred, check logs'
         self.txt.setText(msg)
-
 
 
 def gui_main():
