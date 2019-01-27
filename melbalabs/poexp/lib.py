@@ -16,7 +16,7 @@ account = "emfan"
 #league = "Delve"
 league = "Betrayal"
 
-sleep = 15  # sec
+SLEEP_SEC = 15  # sec
 
 api_url = "http://api.pathofexile.com/ladders/{league}?accountName={account}"
 prev_next_url = "http://api.pathofexile.com/ladders/{league}?limit=3&offset={offset}"
@@ -44,6 +44,11 @@ xp_per_level = {
     98: 3932818530,
     99: 4250334444,
 }
+
+ChaosRecipe = collections.namedtuple('ChaosRecipe', ['need', 'unknown', 'identified', 'counts'])
+
+class LoginException(RuntimeError):
+    pass
 
 def compute_xph(time_measures_per_min, time_now, level_now, experience_now):
     """
@@ -98,9 +103,13 @@ def get_prev_next_xp(rank):
     return prev_xp_diff, next_xp_diff
 
 def find_chaos_recipe_needed(POESESSID):
-    url = stash_url.format(league=league, account=account, tabindex=2, tabs=0)
+    HOWMANY = 5
+    # note first tab
+    url = stash_url.format(league=league, account=account, tabindex=0, tabs=0)
     resp = requests.get(url, cookies={'POESESSID': POESESSID})
     j = resp.json()
+    if 'error' in j:
+        raise LoginException(j['error']['message'])
 
     counts = {
             'helmet': 0,
@@ -126,16 +135,16 @@ def find_chaos_recipe_needed(POESESSID):
             item_class = item['category'][category][0]
             counts[item_class] += 1
         else:
-            unknown.append(item['typeline'])
+            unknown.append(item)
 
     need = []
     for name, count in counts.items():
-        if name == 'ring' and count < 2:
+        if name == 'ring' and count < HOWMANY * 2:
             need.append(name)
-        elif count == 0:
+        elif count < HOWMANY:
             need.append(name)
 
-    return need, unknown, identified, counts
+    return ChaosRecipe(need, unknown, identified, counts)
 
 def color_chaos_recipe(POESESSID):
     # broken with powershell, works with default terminal or conemu
@@ -153,13 +162,27 @@ def color_chaos_recipe(POESESSID):
         'weapons': f.RED,
         'chest': f.RED,
     }
-    need, unknown, identified, counts = find_chaos_recipe_needed(POESESSID)
+    chaos_recipe = find_chaos_recipe_needed(POESESSID)
+    need, unknown, identified, counts = chaos_recipe
     need_color = []
     for item in need:
         if item in colors:
             item = colors[item] + item + s.RESET_ALL
         need_color.append(item)
-    return 'need:{}, unk:{}, id:{} | r:{} a:{} b:{}'.format(', '.join(need_color), unknown, identified, counts['ring'], counts['amulet'], counts['belt'])
+    chaos_recipe_cli_txt = 'need:{}, unk:{}, id:{} | r:{} a:{} b:{} | h:{} b:{} g:{} w:{} c:{}'.format(
+            ', '.join(need_color),
+            unknown,
+            identified,
+            counts['ring'],
+            counts['amulet'],
+            counts['belt'],
+            counts['helmet'],
+            counts['boots'],
+            counts['gloves'],
+            counts['weapons'],
+            counts['chest'],
+    )
+    return chaos_recipe_cli_txt, chaos_recipe
 
 
 def find_poe():
@@ -182,6 +205,8 @@ def find_poe():
 
 
 def main2(conf):
+    exceptions = []
+    chaos_recipe = None
     POESESSID = conf['poesessid']
     try:
         url = api_url.format(league=league, account=account)
@@ -199,7 +224,6 @@ def main2(conf):
             prev_xp_diff, next_xp_diff = get_prev_next_xp(rank)
             xpdiff_desc = 'rank up xp: -{prev_xp_diff}K rank down xp: +{next_xp_diff}K'.format(prev_xp_diff=prev_xp_diff, next_xp_diff=next_xp_diff)
 
-            chaos_recipe_txt = color_chaos_recipe(POESESSID)
 
             time_now = time.time()
             timestr = time.strftime('%Y/%m/%d %H:%M:%S', time.localtime())
@@ -217,7 +241,6 @@ def main2(conf):
             xph_minutes_desc = 'xph (' +  '/'.join([str(minutes) for _, minutes in time_measures_per_min]) + ' min)'  # eg xph (5/10/15 min)
             print(timestr, 'rank', rank, 'level', level, 'xp', pretty_xp, xph_minutes_desc, xph, 'hours to level', hours_remaining, 'samples', samples)
             print(xpdiff_desc)
-            print(chaos_recipe_txt)
 
             txt_fmt = 'rank: {rank} level: {level} experience: {experience}M {xph_minutes_desc}: {xph} hours to level: {hours_remaining}'
             txt_fmt += '\n' + xpdiff_desc
@@ -228,23 +251,39 @@ def main2(conf):
             write_file(txtpath, 'rank unknown')
 
 
+        chaos_recipe_txt, chaos_recipe = color_chaos_recipe(POESESSID)
+        print(chaos_recipe_txt)
+
     except Exception as e:
-        traceback.print_exc()
+        exc = traceback.format_exc()
+        print(exc)
         print('exc ignored')
+        exceptions.append(exc)
+        exceptions.append('exc ignored')
+    return chaos_recipe, exceptions
+
+def run_once(conf):
+    chaos_recipe, exceptions = None, []
+    if find_poe():
+        chaos_recipe, exceptions = main2(conf)
+    else:
+        exc = 'poe not found, skipping'
+        print(exc)
+        exceptions.append(exc)
+    return chaos_recipe, exceptions
 
 
+def read_conf():
+    with open('secrets.json', 'r') as f:
+        conf = json.loads(f.read())
+    return conf
 
 def main():
     colorama.init()
-    with open('secrets.json', 'r') as f:
-        conf = json.loads(f.read())
-
+    conf = read_conf()
     while True:
-        if find_poe():
-            main2(conf)
-        else:
-            print('poe not found, skipping')
-        time.sleep(sleep)
+        run_once(conf)
+        time.sleep(SLEEP_SEC)
 
 
 
