@@ -1,8 +1,11 @@
 import traceback
+import time
 
 from PyQt5 import QtCore
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtWidgets import QHBoxLayout
+from PyQt5.QtWidgets import QVBoxLayout
+from PyQt5.QtWidgets import QPushButton
 from PyQt5.QtWidgets import QLabel
 from PyQt5.QtWidgets import QLayout
 from PyQt5.QtWidgets import QMenu
@@ -18,10 +21,24 @@ import melbalabs.poexp.lib as lib
 # http://doc.qt.io/qt-5/stylesheet-examples.html
 # https://github.com/baoboa/pyqt5/tree/master/examples/widgets
 # https://build-system.fman.io/ fbs installer
+# http://doc.qt.io/qt-5/qguiapplication.html#quitOnLastWindowClosed-prop
+# http://doc.qt.io/qt-5/qpainter.html#details
 
-# TODO movable window + save state
+# TODO button or hotkey for chaos recipe overlay, disappears after a few sec
+"""
+on + click, open a new window, paint rectangles of chaos items on a click through window
+    setAttribute(Qt::WA_NoSystemBackground, true);
+    setAttribute(Qt::WA_TranslucentBackground, true);
+    setAttribute(Qt::WA_TransparentForMouseEvents);
+    setWindowFlags(Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint | Qt::Tool);
+rectangles requre position and area, both come from stash
+stash comes from update function
+modify ChaosRecipe to have position and size of items, not just counters
+poe inventory rectangle position will be hardcoded
+on - click, hide rectangle overlay (close/destroy window so it stops updating?)
+"""
+# TODO movable window + save state (where it was, its size)
 # TODO make installer with fbs
-# TODO quit should close the whole app
 
 
 class Window(QWidget):
@@ -29,24 +46,31 @@ class Window(QWidget):
 
         super().__init__(parent)
 
-        self.setStyleSheet('font: 15pt')
-
-        self.update_fn = update_fn
-
-        self.txt = QLabel('empty')  # no need to parent, layout reparents
-
-        layout = QHBoxLayout(sizeConstraint=QLayout.SetFixedSize)  # shrink to fit
-        layout.setSpacing(0)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self.txt)
-
-        self.setLayout(layout)
-
         self.setWindowFlags(
                 QtCore.Qt.FramelessWindowHint
                 | QtCore.Qt.WindowStaysOnTopHint
                 | QtCore.Qt.Tool  # hide taskbar entry
         )
+
+        self.setStyleSheet('font: 15pt')
+
+        self.txt = QLabel('empty')  # no need to parent, layout reparents
+
+        self.button = QPushButton('+')
+        self.button.setFixedWidth(20)
+        self.button.clicked.connect(self.click_chaos_recipe)
+
+        layout = QHBoxLayout(sizeConstraint=QLayout.SetFixedSize)  # shrink to fit
+        layout.setSpacing(0)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.button)
+        layout.addWidget(self.txt)
+
+        self.setLayout(layout)
+
+
+        self.update_fn = update_fn
+        self.chaos_recipe = None
 
         self.timer = QtCore.QTimer(self)
         self.timer.timeout.connect(self.update)
@@ -58,19 +82,26 @@ class Window(QWidget):
     def contextMenuEvent(self, event):
         menu = QMenu(self)
         quit_act = menu.addAction("quit")
-        quit_act.triggered.connect(self.close)
+        quit_act.triggered.connect(QApplication.instance().quit)
         menu.exec_(event.globalPos())
 
     def update(self):
+        msg = ''
         try:
-            chaos_recipe = self.update_fn()
-            msg = str(chaos_recipe)
+            self.chaos_recipe = self.update_fn()
+            msg = lib.format_chaos_recipe(self.chaos_recipe, colorize=False)
         except lib.PoeNotFoundException as e:
             msg = 'poe not found, nothing to do'
         except Exception as e:
             traceback.print_exc()
             msg = 'exception occurred, check logs'
         self.txt.setText(msg)
+
+    def click_chaos_recipe(self):
+        if not self.chaos_recipe:
+            return
+        time.sleep(1)  # give user a chance to stop using the mouse
+        lib.move_ready_items_to_inventory(self.chaos_recipe)
 
 
 def gui_main():
@@ -82,4 +113,4 @@ def gui_main():
 
     w = Window(update_fn=update_fn)
     w.show()
-    app.exec_()
+    return app.exec_()

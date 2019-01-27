@@ -7,6 +7,7 @@ import requests
 import colorama
 import win32api
 import win32gui
+import pyautogui
 
 txtpath = r"C:\users\melba\desktop\desktop\poerank.txt"
 ACCOUNT = "emfan"
@@ -45,7 +46,34 @@ xp_per_level = {
     99: 4250334444,
 }
 
-ChaosRecipe = collections.namedtuple('ChaosRecipe', ['need', 'unknown', 'identified', 'counts'])
+CHAOS_RECIPE_ITEM_CLASSES = [
+    'helmet',
+    'boots',
+    'gloves',
+    'ring',
+    'amulet',
+    'belt',
+    'weapons',
+    'chest',
+]
+
+ITEM_COLORS_CLI = {
+    'helmet': colorama.Fore.BLUE,
+    'boots': colorama.Fore.CYAN,
+    'gloves': colorama.Fore.YELLOW,
+    'ring': colorama.Fore.MAGENTA,
+    'amulet': colorama.Fore.GREEN,
+    'belt': colorama.Fore.GREEN,
+    'weapons': colorama.Fore.RED,
+    'chest': colorama.Fore.RED,
+}
+
+ITEM_CHAOS_RECIPE_MULTIPLIER = {
+    'ring': 2,
+}
+
+
+ChaosRecipe = collections.namedtuple('ChaosRecipe', ['need', 'unknown', 'identified', 'counts', 'ready'])
 
 class LoginException(RuntimeError):
     pass
@@ -63,6 +91,11 @@ class PoeStash:
             raise LoginException(j['error']['message'])
         self.raw = j
         self.items = j['items']
+
+        self.identified = []
+        for item in self.items:
+            if item['identified']:
+                self.identified.append(item)
 
 def compute_xph(time_measures_per_min, time_now, level_now, experience_now):
     """
@@ -116,77 +149,99 @@ def get_prev_next_xp(rank):
     next_xp_diff = (my_xp - next_xp)//1000
     return prev_xp_diff, next_xp_diff
 
+def move_ready_items_to_inventory(chaos_recipe):
+    # quad tab is this many boxes wide and tall
+    num_boxes = 24
+
+    # a box is this many pixels wide
+    # y 175 745
+    quad_tab_box_pixels = 23.75
+    # quad tab inventory coords start in top left
+    x_start = 20
+    y_start = 176
+
+    y_end = y_start + quad_tab_box_pixels * num_boxes
+
+    for item_class in CHAOS_RECIPE_ITEM_CLASSES:
+        for repeat in range(ITEM_CHAOS_RECIPE_MULTIPLIER.get(item_class, 1)):
+            items = chaos_recipe.ready[item_class]
+            item = items[repeat]
+            x = x_start + quad_tab_box_pixels * (item['x'] + 1)
+            y = y_start + quad_tab_box_pixels * (item['y'] + 1)
+            print('mouse move to', x, y, item['category'])
+            pyautogui.moveTo(x, y)
+            pyautogui.keyDown('ctrl')
+            pyautogui.click()
+            pyautogui.keyUp('ctrl')
+            #time.sleep(10)
+
+
 def find_chaos_recipe_needed(stash):
-    HOWMANY = 5
+    MAX_NEEDED = 5
     counts = {
-            'helmet': 0,
-            'boots': 0,
-            'gloves': 0,
-            'ring': 0,
-            'amulet': 0,
-            'belt': 0,
-            'weapons': 0,
-            'chest': 0,
+        k: 0
+        for k in CHAOS_RECIPE_ITEM_CLASSES
     }
-    unknown = []
+
+    ready_items = {
+        k: []
+        for k in CHAOS_RECIPE_ITEM_CLASSES
+    }
+
     identified = []
-    items = stash.items
-    for item in items:
-        if item['identified']:
-            identified.append(item['typeLine'])
-            continue
+    for item in stash.identified:
+        identified.append(item['typeLine'])
+
+    unknown = []
+    for item in stash.items:
         category = list(item['category'].keys())[0]
         if category == 'weapons':
-            counts['weapons'] += 1
+            counts[category] += 1
+            ready_items[category].append(item)
         elif category in {'accessories', 'armour'}:
             item_class = item['category'][category][0]
             counts[item_class] += 1
+            ready_items[item_class].append(item)
         else:
             unknown.append(item)
 
     need = []
     for name, count in counts.items():
-        if name == 'ring' and count < HOWMANY * 2:
-            need.append(name)
-        elif count < HOWMANY:
+        if count < MAX_NEEDED:
             need.append(name)
 
-    return ChaosRecipe(need, unknown, identified, counts)
+    ready_count = min(
+        len(ready_items[k]) for k in CHAOS_RECIPE_ITEM_CLASSES
+    )
+    for k in CHAOS_RECIPE_ITEM_CLASSES:
+        adjusted_count = ready_count * ITEM_CHAOS_RECIPE_MULTIPLIER.get(k, 1)
+        ready_items[k] = ready_items[k][:adjusted_count]
 
-def color_chaos_recipe(chaos_recipe):
+    return ChaosRecipe(need, unknown, identified, counts, ready_items)
+
+def format_chaos_recipe(chaos_recipe, colorize: bool):
     # broken with powershell, works with default terminal or conemu
     # not enough colors
-    f = colorama.Fore
-    b = colorama.Back
-    s = colorama.Style
-    colors = {
-        'helmet': f.BLUE,
-        'boots': f.CYAN,
-        'gloves': f.YELLOW,
-        'ring': f.MAGENTA,
-        'amulet': f.GREEN,
-        'belt': f.GREEN,
-        'weapons': f.RED,
-        'chest': f.RED,
-    }
-    need, unknown, identified, counts = chaos_recipe
-    need_color = []
+
+    need, unknown, identified, counts, ready_items = chaos_recipe
+    need = []
     for item in need:
-        if item in colors:
-            item = colors[item] + item + s.RESET_ALL
-        need_color.append(item)
-    chaos_recipe_cli_txt = 'need:{}, unk:{}, id:{} | r:{} a:{} b:{} | h:{} b:{} g:{} w:{} c:{}'.format(
-            ', '.join(need_color),
+        if item in ITEM_COLORS_CLI and colorize:
+            item = ITEM_COLORS_CLI[item] + item + colorama.Style.RESET_ALL
+        need.append(item)
+
+    adjusted_counts = {
+        k: counts[k] / ITEM_CHAOS_RECIPE_MULTIPLIER.get(k, 1)
+        for k in CHAOS_RECIPE_ITEM_CLASSES
+    }
+    chaos_recipe_cli_txt = '''\
+need:{}, unk:{}, id:{} | \
+r:{ring:g} a:{amulet:g} b:{belt:g} | \
+h:{helmet:g} b:{boots:g} g:{gloves:g} w:{weapons:g} c:{chest:g}'''.format(
+            ', '.join(need),
             unknown,
             identified,
-            counts['ring'],
-            counts['amulet'],
-            counts['belt'],
-            counts['helmet'],
-            counts['boots'],
-            counts['gloves'],
-            counts['weapons'],
-            counts['chest'],
+            **adjusted_counts,
     )
     return chaos_recipe_cli_txt
 
@@ -258,7 +313,7 @@ def main2(conf):
 
     stash = PoeStash(POESESSID)
     chaos_recipe = find_chaos_recipe_needed(stash)
-    chaos_recipe_txt = color_chaos_recipe(chaos_recipe)
+    chaos_recipe_txt = format_chaos_recipe(chaos_recipe, colorize=True)
     print(chaos_recipe_txt)
 
     return chaos_recipe
