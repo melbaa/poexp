@@ -9,13 +9,43 @@ import win32api
 import win32gui
 import pyautogui
 
+# TODO add gem quality search in the dump tab. eg 20% qual single gem or 40% qual 4 gems ready to sell
+# move to inventory only if worth is >= 2 gcp (usually 8 10% qual gems)
+# TODO UI show price of exalt, regal, alch, chisel, fusing in chaos (from poe.watch API or poe.ninja or currency.poe.trade)
+# TODO UI show rank
+# TODO UI needed items colored like item filter
+
+# -- LOW PRIORITY / NEVER --
+# TODO UI movable window + save state (where it was, its size)
+# TODO make installer with fbs
+# TODO button or hotkey for chaos recipe overlay drawing over inventory screen, disappears after a few sec
+# could be useful for manual chaos recipe
+
+# FEATURE track xp/hr in 15/45/135min increments
+# FEATURE time remaining to level up for levels >= 90
+# FEATURE xp to next and previous rank (how much someone is leading or trailing)
+# FEATURE UI shows current counts of each chaos recipe item
+# FEATURE UI shows needed/missing items to complete eg. 5 chaos recipes
+# FEATURE UI chaos recipe button moves 1 completed recipe to inventory
+# basically does item sorting for you
+# FEATURE UI chaos recipe button becomes + only if there's enough items AND there are enough
+# stash items after an API update. In other words, the + should clear after
+# it was clicked until an API update (small unavoidable race condition - API updates
+# while chaos items are being moved out of stash tab for a recipe leading to incorrect counts)
+# FEATURE UI button becomes o when clicked to show we are waiting for an API update with new items
+# FEATURE UI warning when dump tab contains some unknown and identified items
+# FEATURE UI always on top
+# FEATURE UI right click quit menu
+# FEATURE don't poll APIs when POE is not found
+
 txtpath = r"C:\users\melba\desktop\desktop\poerank.txt"
 ACCOUNT = "emfan"
 #LEAGUE = "Abyss"
 #LEAGUE = "Bestiary"
 #LEAGUE = "Incursion"
 #LEAGUE = "Delve"
-LEAGUE = "Betrayal"
+#LEAGUE = "Betrayal"
+LEAGUE = "Synthesis"
 
 SLEEP_SEC = 15  # sec
 
@@ -150,6 +180,9 @@ def get_prev_next_xp(rank):
     return prev_xp_diff, next_xp_diff
 
 def move_ready_items_to_inventory(chaos_recipe):
+    # limit how fast we are clickin
+    pyautogui.PAUSE = 0.05  # default 0.1
+
     # quad tab is this many boxes wide and tall
     num_boxes = 24
 
@@ -215,7 +248,7 @@ def find_chaos_recipe_needed(stash):
             need.append(name)
 
     ready_count = min(
-        len(ready_items[k]) for k in CHAOS_RECIPE_ITEM_CLASSES
+        len(ready_items[k]) // ITEM_CHAOS_RECIPE_MULTIPLIER.get(k, 1) for k in CHAOS_RECIPE_ITEM_CLASSES
     )
     for k in CHAOS_RECIPE_ITEM_CLASSES:
         adjusted_count = ready_count * ITEM_CHAOS_RECIPE_MULTIPLIER.get(k, 1)

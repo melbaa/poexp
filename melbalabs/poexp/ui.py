@@ -24,7 +24,6 @@ import melbalabs.poexp.lib as lib
 # http://doc.qt.io/qt-5/qguiapplication.html#quitOnLastWindowClosed-prop
 # http://doc.qt.io/qt-5/qpainter.html#details
 
-# TODO button or hotkey for chaos recipe overlay, disappears after a few sec
 """
 on + click, open a new window, paint rectangles of chaos items on a click through window
     setAttribute(Qt::WA_NoSystemBackground, true);
@@ -37,8 +36,9 @@ modify ChaosRecipe to have position and size of items, not just counters
 poe inventory rectangle position will be hardcoded
 on - click, hide rectangle overlay (close/destroy window so it stops updating?)
 """
-# TODO movable window + save state (where it was, its size)
-# TODO make installer with fbs
+
+BUTTON_READY_TXT = '+'
+BUTTON_WAIT_TXT = 'o'
 
 
 class Window(QWidget):
@@ -56,7 +56,7 @@ class Window(QWidget):
 
         self.txt = QLabel('empty')  # no need to parent, layout reparents
 
-        self.button = QPushButton('+')
+        self.button = QPushButton(BUTTON_WAIT_TXT)
         self.button.setFixedWidth(20)
         self.button.clicked.connect(self.click_chaos_recipe)
 
@@ -88,7 +88,12 @@ class Window(QWidget):
     def update(self):
         msg = ''
         try:
+            last_chaos_recipe = self.chaos_recipe
             self.chaos_recipe = self.update_fn()
+            if last_chaos_recipe != self.chaos_recipe and self.is_chaos_recipe_ready():
+                # we pulled something from API and it was an actual update
+                # we also have enough items
+                self.button.setText(BUTTON_READY_TXT)
             msg = lib.format_chaos_recipe(self.chaos_recipe, colorize=False)
         except lib.PoeNotFoundException as e:
             msg = 'poe not found, nothing to do'
@@ -98,14 +103,19 @@ class Window(QWidget):
         self.txt.setText(msg)
 
     def click_chaos_recipe(self):
-        if not self.chaos_recipe:
-            return
-        if not self.chaos_recipe.ready_count:
-            self.txt.setText('not enough items to complete recipe')
+        self.button.setText(BUTTON_WAIT_TXT)
+        if not self.is_chaos_recipe_ready():
             return
         time.sleep(1)  # give user a chance to stop using the mouse
         lib.move_ready_items_to_inventory(self.chaos_recipe)
 
+    def is_chaos_recipe_ready(self):
+        if not self.chaos_recipe:
+            return False
+        if not self.chaos_recipe.ready_count:
+            self.txt.setText('not enough items to complete recipe')
+            return False
+        return True
 
 def gui_main():
     conf = lib.read_conf()
