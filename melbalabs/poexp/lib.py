@@ -9,6 +9,10 @@ import win32api
 import win32gui
 import pyautogui
 
+# TODO gemcutter recipe stash scan
+# TODO currency stash scan
+# TODO 4 x 6 socket items stash scan. skip 6l
+# TODO remove chaos_recipe identified count. put it somewhere else
 # TODO add gem quality search in the dump tab. eg 20% qual single gem or 40% qual 4 gems ready to sell
 # move to inventory only if worth is >= 2 gcp (usually 8 10% qual gems)
 # TODO UI show price of exalt, regal, alch, chisel, fusing in chaos (from poe.watch API or poe.ninja or currency.poe.trade)
@@ -37,6 +41,8 @@ import pyautogui
 # FEATURE UI always on top
 # FEATURE UI right click quit menu
 # FEATURE don't poll APIs when POE is not found
+# FEATURE poestash should tag items when it categorizes them, so the uncategorized ones can be counted. eg 'poexp_found' = True
+# FEATURE poestash categorizes items for different recipes
 
 txtpath = r"C:\users\melba\desktop\desktop\poerank.txt"
 ACCOUNT = "emfan"
@@ -46,6 +52,7 @@ ACCOUNT = "emfan"
 #LEAGUE = "Delve"
 #LEAGUE = "Betrayal"
 LEAGUE = "Synthesis"
+LEAGUE = "Standard"
 
 SLEEP_SEC = 15  # sec
 
@@ -103,7 +110,12 @@ ITEM_CHAOS_RECIPE_MULTIPLIER = {
 }
 
 
-ChaosRecipe = collections.namedtuple('ChaosRecipe', ['need', 'unknown', 'identified', 'counts', 'ready', 'ready_count'])
+ChaosRecipe = collections.namedtuple('ChaosRecipe', [
+    'need', 'unknown', 'identified', 'counts', 'ready', 'ready_count',
+])
+GemcutterRecipe = collections.namedtuple('GemcutterRecipe', [
+    'ready', 'ready_20qual', 'total_quality', 'ready_count',
+])
 
 class LoginException(RuntimeError):
     pass
@@ -111,7 +123,35 @@ class LoginException(RuntimeError):
 class PoeNotFoundException(RuntimeError):
     pass
 
+
+
+STASH_FRAME_TYPE = {
+    'normal': 0,
+    'magic': 1,
+    'rare': 2,
+    'unique': 3,
+    'gem': 4,
+    'currency': 5,
+    'divination card': 6,
+    'quest item': 7,
+    'prophecy': 8,
+    'relic': 9,
+}
+
+def get_quality(item):
+    for prop in item['properties']:
+        if prop['name'] == 'Quality':
+            qual = prop['values'][0][0]
+            qual = qual[1:-1]
+            return int(qual)
+    return 0
+
+def tag_found(item):
+    item['poexp_found'] = True
+
 class PoeStash:
+    # https://pathofexile.gamepedia.com/Public_stash_tab_API#items
+
     def __init__(self, poesessid):
         # note first tab in inventory
         url = stash_url.format(league=LEAGUE, account=ACCOUNT, tabindex=0, tabs=0)
@@ -121,11 +161,55 @@ class PoeStash:
             raise LoginException(j['error']['message'])
         self.raw = j
         self.items = j['items']
+        self.chaos_recipe_items = self.get_chaos_recipe_items()
+        self.gemcutter_recipe_items = self.get_gemcutter_recipe_items()
+        self.identified_items = self.get_identified_items()
 
-        self.identified = []
+    def get_identified_items(self):
+        items = []
         for item in self.items:
             if item['identified']:
-                self.identified.append(item)
+                tag_found(item)
+                items.append(item)
+        return items
+
+    def get_chaos_recipe_items(self):
+        """
+        a chaos recipe item is rare, unid, wep/armor/accessory
+        at least 10 qual
+        """
+        items = []
+        for item in self.items:
+            if item['identified']:
+                continue
+            category = list(item['category'].keys())[0]
+            if category not in {'weapons', 'accessories', 'armour'}:
+                continue
+            if item['frameType'] != STASH_FRAME_TYPE['rare']:
+                continue
+            tag_found(item)
+            items.append(item)
+        return items
+
+    def get_gemcutter_recipe_items(self):
+        """
+        gems with quality > 0
+        skip enlighten, empower, enhance
+        """
+        items = []
+        for item in self.items:
+            category = list(item['category'].keys())[0]
+            if category != 'gems':
+                continue
+            if item['typeLine'] in {'Enlighten Support', 'Empower Support', 'Enhance Support'}:
+                continue
+            if get_quality(item) == 0:
+                continue
+            tag_found(item)
+            items.append(item)
+        return items
+
+
 
 def compute_xph(time_measures_per_min, time_now, level_now, experience_now):
     """
@@ -213,6 +297,14 @@ def move_ready_items_to_inventory(chaos_recipe):
             pyautogui.keyUp('ctrl')
 
 
+def find_gcp_needed(stash):
+    """
+    single gem 20 qual
+    multiple gems 40 qual total
+    """
+    return
+
+
 def find_chaos_recipe_needed(stash):
     MAX_NEEDED = 5
     counts = {
@@ -226,11 +318,11 @@ def find_chaos_recipe_needed(stash):
     }
 
     identified = []
-    for item in stash.identified:
+    for item in stash.identified_items:
         identified.append(item['typeLine'])
 
     unknown = []
-    for item in stash.items:
+    for item in stash.chaos_recipe_items:
         category = list(item['category'].keys())[0]
         if category == 'weapons':
             counts[category] += 1
@@ -241,6 +333,7 @@ def find_chaos_recipe_needed(stash):
             ready_items[item_class].append(item)
         else:
             unknown.append(item)
+            raise RuntimeError('unknown item ' + item)
 
     need = []
     for name, count in counts.items():
@@ -282,6 +375,115 @@ h:{helmet:g} b:{boots:g} g:{gloves:g} w:{weapons:g} c:{chest:g}'''.format(
             **adjusted_counts,
     )
     return chaos_recipe_cli_txt
+
+
+class GemSolver:
+
+    """
+    a solution is a list of items
+
+    an optimization is to prune the solutions after each item. do it in case of
+    MemoryError or measurable performance impact
+    """
+
+    def __init__(self, items):
+        self.items = items
+
+    @staticmethod
+    def solution_quality(solution):
+        if not solution:
+            return 0
+
+        return sum(get_quality(i) for i in solution)
+
+    def build_candidate_solutions(self, quality_min):
+        items = self.items
+        candidate_solutions = []
+        for item in items:
+            print('candidate_solutions', len(candidate_solutions))
+
+            # duplicate existing solutions without the item, so we get combinations without the item
+            duplicate_solutions = []
+
+            # add to existing solutions
+            for candidate_solution in candidate_solutions:
+                if self.solution_quality(candidate_solution) < quality_min and len(candidate_solution) < 4:
+                    duplicate_solutions.append(list(candidate_solution))
+                    candidate_solution.append(item)
+
+            candidate_solutions.extend(duplicate_solutions)
+
+            # start a new solution
+            candidate_solutions.append([item])
+
+        return candidate_solutions
+
+    def find_min_solution(self, quality_min, quality_max):
+        solutions = self.build_candidate_solutions(quality_min=quality_min)
+        best = solutions[0]
+        for solution in solutions:
+            if quality_min <= self.solution_quality(solution) < self.solution_quality(best) < quality_max:
+                best = solution
+        return best
+
+
+
+
+def find_gemcutter_needed(stash):
+    """
+    20 qual gems go in ready_20qual
+
+    smaller gems in items
+    10 11 12 13 14 15 16 17 18 19
+
+    possible algorithms
+    - greedy knapsack
+    - coin change-making
+    - min-coin-chainge
+        https://www.algorithmist.com/index.php/Min-Coin_Change
+        https://www.geeksforgeeks.org/find-minimum-number-of-coins-that-make-a-change/
+    - package-merge, but not enough items to be worth it
+    - bruteforce all 3-tuples and 4-tuples
+    - all combinations - check all candidate solutions for closest to QUALITY_NEEDED
+    for 40 items, it's (40 choose 3) + (40 choose 4) = 101270 possible solutions
+
+    we don't know the distribution of qualities dropping
+
+    we are looking for a solution where the quality of the gems is
+    40 <= solution < (40 + smallest gem qual in filter, currently 10 and above)
+    and the number of gems is between 3 and 4 to be close to chaos recipe
+    3 <= num_gems_used <= 4
+
+    in other words, 3 or 4 gems, as close to 40 qual as possible
+
+    solutions are eg
+    19 + 19 + 2
+    10 + 10 + 10 + 10
+
+    """
+
+
+    QUALITY_NEEDED = 40
+    total_quality = 0  # for
+    ready_count = 0
+    ready_20qual = []
+
+    items = []
+    for item in stash.gemcutter_recipe_items:
+        quality = get_quality(item)
+        if quality == 20:
+            ready_count += 1
+            ready_20qual.append(item)
+        else:
+            total_quality += get_quality(item)
+            items.append(item)
+
+    solver = GemSolver(items)
+    solution = solver.find_min_solution(quality_min=QUALITY_NEEDED, quality_max=QUALITY_NEEDED+10)
+    if solution:
+        ready_count += 1
+
+    return GemcutterRecipe(ready=solution, ready_20qual=ready_20qual, total_quality=total_quality, ready_count=ready_count)
 
 
 def find_poe():
@@ -354,15 +556,17 @@ def main2(conf):
     chaos_recipe_txt = format_chaos_recipe(chaos_recipe, colorize=True)
     print(chaos_recipe_txt)
 
-    return chaos_recipe
+    gemcutter_recipe = find_gemcutter_needed(stash)
+    return chaos_recipe, gemcutter_recipe
+
 
 def run_once(conf):
     chaos_recipe = None
     if find_poe():
-        chaos_recipe = main2(conf)
+        chaos_recipe, gemcutter_items = main2(conf)
     else:
         raise PoeNotFoundException()
-    return chaos_recipe
+    return chaos_recipe, gemcutter_items
 
 
 def read_conf():

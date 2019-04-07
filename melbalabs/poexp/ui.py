@@ -58,7 +58,7 @@ class Window(QWidget):
 
         self.button = QPushButton(BUTTON_WAIT_TXT)
         self.button.setFixedWidth(20)
-        self.button.clicked.connect(self.click_chaos_recipe)
+        self.button.clicked.connect(self.click_recipe_items)
 
         layout = QHBoxLayout(sizeConstraint=QLayout.SetFixedSize)  # shrink to fit
         layout.setSpacing(0)
@@ -68,9 +68,9 @@ class Window(QWidget):
 
         self.setLayout(layout)
 
-
         self.update_fn = update_fn
         self.chaos_recipe = None
+        self.gemcutter_recipe = None
 
         self.timer = QtCore.QTimer(self)
         self.timer.timeout.connect(self.update)
@@ -89,11 +89,19 @@ class Window(QWidget):
         msg = ''
         try:
             last_chaos_recipe = self.chaos_recipe
-            self.chaos_recipe = self.update_fn()
+            last_gemcutter_recipe = self.gemcutter_recipe
+
+            self.chaos_recipe, self.gemcutter_recipe = self.update_fn()
+
             if last_chaos_recipe != self.chaos_recipe and self.is_chaos_recipe_ready():
                 # we pulled something from API and it was an actual update
                 # we also have enough items
                 self.button.setText(BUTTON_READY_TXT)
+
+            # TODO uncomment
+            # if last_gemcutter_recipe != self.gemcutter_recipe and self.gemcutter_recipe.ready_count
+            #     self.button.setText(BUTTON_READY_TXT)
+
             msg = lib.format_chaos_recipe(self.chaos_recipe, colorize=False)
         except lib.PoeNotFoundException as e:
             msg = 'poe not found, nothing to do'
@@ -102,7 +110,7 @@ class Window(QWidget):
             msg = 'exception occurred, check logs'
         self.txt.setText(msg)
 
-    def click_chaos_recipe(self):
+    def click_recipe_items(self):
         self.button.setText(BUTTON_WAIT_TXT)
         if not self.is_chaos_recipe_ready():
             return
