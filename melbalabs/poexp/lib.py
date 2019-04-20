@@ -9,6 +9,7 @@ import win32api
 import win32gui
 import pyautogui
 
+# TODO gemcutter solve use a SMT/SAT solver (z3, pySMT, pySAT)
 # TODO gemcutter recipe stash scan
 # TODO currency stash scan
 # TODO 4 x 6 socket items stash scan. skip 6l
@@ -141,9 +142,17 @@ STASH_FRAME_TYPE = {
 def get_quality(item):
     for prop in item['properties']:
         if prop['name'] == 'Quality':
-            qual = prop['values'][0][0]
+            qual = prop['values'][0][0]  # eg 12%
             qual = qual[1:-1]
             return int(qual)
+    return 0
+
+def get_gem_level(item):
+    for prop in item['properties']:
+        if prop['name'] == 'Level':
+            level = prop['values'][0][0]  # eg 20 (Max)
+            level = level.split(' ')[0]
+            return int(level)
     return 0
 
 def tag_found(item):
@@ -203,7 +212,12 @@ class PoeStash:
                 continue
             if item['typeLine'] in {'Enlighten Support', 'Empower Support', 'Enhance Support'}:
                 continue
-            if get_quality(item) == 0:
+            quality = get_quality(item)
+            if quality == 0:
+                continue
+            gem_level = get_gem_level(item)
+            if gem_level >= 20 and quality >= 20:
+                # we would rather sell those on the market
                 continue
             tag_found(item)
             items.append(item)
@@ -263,38 +277,59 @@ def get_prev_next_xp(rank):
     next_xp_diff = (my_xp - next_xp)//1000
     return prev_xp_diff, next_xp_diff
 
-def move_ready_items_to_inventory(chaos_recipe):
-    # limit how fast we are clickin
-    pyautogui.PAUSE = 0.05  # default 0.1
 
-    # quad tab is this many boxes wide and tall
-    num_boxes = 24
+class StashClicker:
+    def __init__(self):
+        # limit how fast we are clickin
+        pyautogui.PAUSE = 0.05  # default 0.1
 
-    # a box is this many pixels wide
-    # y 175 745
-    quad_tab_box_pixels_x = 25
-    quad_tab_box_pixels_y = 25
-    # quad tab inventory coords start in top left
-    x_start = 20
-    y_start = 176
+        # quad tab is this many boxes wide and tall
+        self.num_boxes = 24
 
-    y_end = y_start + quad_tab_box_pixels_y * num_boxes
+        # a box is this many pixels wide
+        # y 175 745
+        self.quad_tab_box_pixels_x = 25
+        self.quad_tab_box_pixels_y = 25
+        # quad tab inventory coords start in top left
+        self.x_start = 20
+        self.y_start = 176
 
+        self.y_end = self.y_start + self.quad_tab_box_pixels_y * self.num_boxes
+
+    def click_item(self, item):
+        x = self.x_start + self.quad_tab_box_pixels_x * (item['x'])
+        y = self.y_start + self.quad_tab_box_pixels_y * (item['y'])
+        print('mouse move to', x, y, item['x'], item['y'], item['category'])
+        pyautogui.moveTo(x, y)
+        pyautogui.keyDown('ctrl')
+        pyautogui.click()
+        pyautogui.keyUp('ctrl')
+
+
+
+def move_ready_items_to_inventory(chaos_recipe, gemcutter_recipe):
+
+    stash_clicker = StashClicker()
+
+    # chaos recipe
     if not chaos_recipe.ready_count:
-        print ('not enough items to complete recipe')
-        return
+        print ('not enough chaos recipe items to complete recipe')
+    else:
+        for item_class in CHAOS_RECIPE_ITEM_CLASSES:
+            for repeat in range(ITEM_CHAOS_RECIPE_MULTIPLIER.get(item_class, 1)):
+                items = chaos_recipe.ready[item_class]
+                item = items[repeat]
+                stash_clicker.click_item(item)
 
-    for item_class in CHAOS_RECIPE_ITEM_CLASSES:
-        for repeat in range(ITEM_CHAOS_RECIPE_MULTIPLIER.get(item_class, 1)):
-            items = chaos_recipe.ready[item_class]
-            item = items[repeat]
-            x = x_start + quad_tab_box_pixels_x * (item['x'])
-            y = y_start + quad_tab_box_pixels_y * (item['y'])
-            print('mouse move to', x, y, item['x'], item['y'], item['category'])
-            pyautogui.moveTo(x, y)
-            pyautogui.keyDown('ctrl')
-            pyautogui.click()
-            pyautogui.keyUp('ctrl')
+    # gemcutter recipe
+    if not gemcutter_recipe.ready_count:
+        print('not enough gemcutter items to complete recipe')
+    else:
+        for item in gemcutter_recipe.ready_20qual:
+            stash_clicker.click_item(item)
+
+        for item in gemcutter_recipe.ready:
+            stash_clicker.click_item(item)
 
 
 def find_gcp_needed(stash):
@@ -381,13 +416,17 @@ class GemSolver:
 
     """
     a solution is a list of items
+    the best solution is as close to 40 as possible. in case of ties, take the one with less items
 
     an optimization is to prune the solutions after each item. do it in case of
     MemoryError or measurable performance impact
     """
 
-    def __init__(self, items):
+    def __init__(self, items, quality_min, quality_max, num_items_max):
         self.items = items
+        self.quality_min = quality_min
+        self.quality_max = quality_max
+        self.num_items_max = num_items_max
 
     @staticmethod
     def solution_quality(solution):
@@ -396,34 +435,49 @@ class GemSolver:
 
         return sum(get_quality(i) for i in solution)
 
-    def build_candidate_solutions(self, quality_min):
+    def is_solution(self, solution):
+        return self.quality_min <= self.solution_quality(solution) < self.quality_max and len(solution) <= self.num_items_max
+
+
+    def build_candidate_solutions(self):
         items = self.items
         candidate_solutions = []
         for item in items:
             print('candidate_solutions', len(candidate_solutions))
 
-            # duplicate existing solutions without the item, so we get combinations without the item
+           # duplicate existing solutions without the item, so we get combinations without the item
             duplicate_solutions = []
 
             # add to existing solutions
             for candidate_solution in candidate_solutions:
-                if self.solution_quality(candidate_solution) < quality_min and len(candidate_solution) < 4:
+                if self.solution_quality(candidate_solution) < self.quality_min and len(candidate_solution) < self.num_items_max:
                     duplicate_solutions.append(list(candidate_solution))
                     candidate_solution.append(item)
 
             candidate_solutions.extend(duplicate_solutions)
 
-            # start a new solution
+            # start a new candidate solution with this item
             candidate_solutions.append([item])
 
         return candidate_solutions
 
-    def find_min_solution(self, quality_min, quality_max):
-        solutions = self.build_candidate_solutions(quality_min=quality_min)
-        best = solutions[0]
+    def find_min_solution(self):
+        solutions = self.build_candidate_solutions()
+
+        # find an inital solution to compare to
         for solution in solutions:
-            if quality_min <= self.solution_quality(solution) < self.solution_quality(best) < quality_max:
+            if self.is_solution(solution):
                 best = solution
+                break
+        else:
+            return None
+
+        for solution in solutions:
+            if self.is_solution(solution):
+                if self.solution_quality(solution) < self.solution_quality(best):
+                    best = solution
+                elif self.solution_quality(solution) == self.solution_quality(best) and len(solution) < len(best):
+                    best = solution
         return best
 
 
@@ -457,29 +511,36 @@ def find_gemcutter_needed(stash):
     in other words, 3 or 4 gems, as close to 40 qual as possible
 
     solutions are eg
-    19 + 19 + 2
+    14 + 16 + 10
     10 + 10 + 10 + 10
+    19 + 19 + 2
 
     """
 
-
+    QUALITY_PERFECT = 20
     QUALITY_NEEDED = 40
-    total_quality = 0  # for
+    NUM_ITEMS_MAX = 4
+    total_quality = 0
     ready_count = 0
     ready_20qual = []
 
     items = []
     for item in stash.gemcutter_recipe_items:
         quality = get_quality(item)
-        if quality == 20:
+        if quality == QUALITY_PERFECT:
             ready_count += 1
             ready_20qual.append(item)
         else:
             total_quality += get_quality(item)
             items.append(item)
 
-    solver = GemSolver(items)
-    solution = solver.find_min_solution(quality_min=QUALITY_NEEDED, quality_max=QUALITY_NEEDED+10)
+    solver = GemSolver(
+        items=items,
+        quality_min=QUALITY_NEEDED,
+        quality_max=QUALITY_NEEDED+10,
+        num_items_max=NUM_ITEMS_MAX,
+    )
+    solution = solver.find_min_solution()
     if solution:
         ready_count += 1
 

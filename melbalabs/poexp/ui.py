@@ -99,8 +99,8 @@ class Window(QWidget):
                 self.button.setText(BUTTON_READY_TXT)
 
             # TODO uncomment
-            # if last_gemcutter_recipe != self.gemcutter_recipe and self.gemcutter_recipe.ready_count
-            #     self.button.setText(BUTTON_READY_TXT)
+            if last_gemcutter_recipe != self.gemcutter_recipe and self.is_gemcutter_recipe_ready():
+                self.button.setText(BUTTON_READY_TXT)
 
             msg = lib.format_chaos_recipe(self.chaos_recipe, colorize=False)
         except lib.PoeNotFoundException as e:
@@ -112,18 +112,27 @@ class Window(QWidget):
 
     def click_recipe_items(self):
         self.button.setText(BUTTON_WAIT_TXT)
-        if not self.is_chaos_recipe_ready():
+        if not self.is_chaos_recipe_ready() and not self.is_gemcutter_recipe_ready():
             return
         time.sleep(1)  # give user a chance to stop using the mouse
-        lib.move_ready_items_to_inventory(self.chaos_recipe)
+        lib.move_ready_items_to_inventory(self.chaos_recipe, self.gemcutter_recipe)
 
     def is_chaos_recipe_ready(self):
         if not self.chaos_recipe:
             return False
         if not self.chaos_recipe.ready_count:
-            self.txt.setText('not enough items to complete recipe')
+            self.txt.setText('not enough items to complete chaos recipe')
             return False
         return True
+
+    def is_gemcutter_recipe_ready(self):
+        if not self.gemcutter_recipe:
+            return False
+        if not self.gemcutter_recipe.ready_count:
+            self.txt.setText('not enough items to complete gemcutter recipe')
+            return False
+        return True
+
 
 def gui_main():
     conf = lib.read_conf()
