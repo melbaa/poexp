@@ -9,11 +9,12 @@ import win32api
 import win32gui
 import pyautogui
 
+# TODO stop counting gems as identified items that should be removed from dump tab
 # TODO gemcutter solve use a SMT/SAT solver (z3, pySMT, pySAT)
-# TODO gemcutter recipe stash scan
 # TODO currency stash scan
 # TODO 4 x 6 socket items stash scan. skip 6l
 # TODO remove chaos_recipe identified count. put it somewhere else
+# TODO gemcutter ready_count at info bar on top as `gcp`
 # TODO add gem quality search in the dump tab. eg 20% qual single gem or 40% qual 4 gems ready to sell
 # move to inventory only if worth is >= 2 gcp (usually 8 10% qual gems)
 # TODO UI show price of exalt, regal, alch, chisel, fusing in chaos (from poe.watch API or poe.ninja or currency.poe.trade)
@@ -44,6 +45,7 @@ import pyautogui
 # FEATURE don't poll APIs when POE is not found
 # FEATURE poestash should tag items when it categorizes them, so the uncategorized ones can be counted. eg 'poexp_found' = True
 # FEATURE poestash categorizes items for different recipes
+# FEATURE gemcutter recipe stash scan and clicker
 
 txtpath = r"C:\users\melba\desktop\desktop\poerank.txt"
 ACCOUNT = "emfan"
@@ -155,8 +157,15 @@ def get_gem_level(item):
             return int(level)
     return 0
 
+
+POEXP_TAG_FOUND = 'poexp_found'
+
 def tag_found(item):
-    item['poexp_found'] = True
+    item[POEXP_TAG_FOUND] = True
+
+def is_tag_found(item):
+    return item.get(POEXP_TAG_FOUND)
+
 
 class PoeStash:
     # https://pathofexile.gamepedia.com/Public_stash_tab_API#items
@@ -177,7 +186,7 @@ class PoeStash:
     def get_identified_items(self):
         items = []
         for item in self.items:
-            if item['identified']:
+            if item['identified'] and not is_tag_found(item):
                 tag_found(item)
                 items.append(item)
         return items

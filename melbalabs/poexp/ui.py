@@ -98,7 +98,6 @@ class Window(QWidget):
                 # we also have enough items
                 self.button.setText(BUTTON_READY_TXT)
 
-            # TODO uncomment
             if last_gemcutter_recipe != self.gemcutter_recipe and self.is_gemcutter_recipe_ready():
                 self.button.setText(BUTTON_READY_TXT)
 
