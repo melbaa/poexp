@@ -30,5 +30,10 @@ def test_format_chaos_recipe(chaos_recipe, gemcutter_recipe, poestash):
     msg_chaos = lib.format_chaos_recipe(chaos_recipe, colorize=False)
     msg_ident = lib.format_identified_items(poestash)
     msg_gcp = lib.format_gemcutter_recipe(gemcutter_recipe)
+    msg_6s = lib.format_six_socket_items(poestash)
     import pdb;pdb.set_trace()
+
+def test_six_socket_items(poestash):
+    print(len(poestash.six_socket_items))
+    print(len(poestash.six_link_items))
 

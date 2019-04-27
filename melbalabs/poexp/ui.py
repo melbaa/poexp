@@ -103,6 +103,7 @@ class Window(QWidget):
 
             msg = lib.format_chaos_recipe(self.chaos_recipe, colorize=False)
             msg += ' | ' + lib.format_gemcutter_recipe(self.gemcutter_recipe)
+            msg += ' ' + lib.format_six_socket_items(self.poe_stash)
             msg += ' | ' + lib.format_identified_items(self.poe_stash)
         except lib.PoeNotFoundException as e:
             msg = 'poe not found, nothing to do'

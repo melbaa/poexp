@@ -9,13 +9,19 @@ import win32api
 import win32gui
 import pyautogui
 
+# NOTE: stash and inventory updates on instance change (self or other player) or after a long timeout
+
+# TODO empty dump tab priority. how to free most space: 6s (only 4 to 6 items) -> chaos recipe -> gcp recipe -> currency -> div cards (10 or more)
+# maybe use a generator, so each time + is clicked, move to next type. how to reset on stash update?
+# TODO stash count 6s items, skip 6l
+# TODO click 6s items, skip 6l
 # TODO unknown items shouldn't be part of chaos recipe
 # TODO gemcutter solve use a SMT/SAT solver (z3, pySMT, pySAT)
 # TODO currency stash scan
 # TODO 4 x 6 socket items stash scan. skip 6l
-# TODO gemcutter ready_count at info bar on top as `gcp`
-# TODO add gem quality search in the dump tab. eg 20% qual single gem or 40% qual 4 gems ready to sell
-# move to inventory only if worth is >= 2 gcp (usually 8 10% qual gems)
+# TODO chaos recipe sounds change based on needed items. create symlinks and use atomic rename
+# See ReplaceFile() and MoveFileEx and use the MOVEFILE_REPLACE_EXISTING and MOVEFILE_WRITE_THROUGH
+# TODO six link items handling? see PoeStash.six_link_items
 # TODO UI show price of exalt, regal, alch, chisel, fusing in chaos (from poe.watch API or poe.ninja or currency.poe.trade)
 # TODO UI show rank
 # TODO UI needed items colored like item filter
@@ -44,9 +50,9 @@ import pyautogui
 # FEATURE don't poll APIs when POE is not found
 # FEATURE poestash should tag items when it categorizes them, so the uncategorized ones can be counted. eg 'poexp_found' = True
 # FEATURE poestash categorizes items for different recipes
-# FEATURE gemcutter recipe stash scan and clicker
+# FEATURE gemcutter recipe stash scan and clicker. 20 qual single and 40 qual multi gem
 # FEATURE gems don't count as identified items that should be removed from dump tab
-# FEATURE gcp count in txt bar
+# FEATURE gcp count in info bar
 
 txtpath = r"C:\users\melba\desktop\desktop\poerank.txt"
 ACCOUNT = "emfan"
@@ -168,6 +174,15 @@ def is_tag_found(item):
     return item.get(POEXP_TAG_FOUND)
 
 
+def item_socket_groups(item):
+    # if there's only 1 group, the item is fully linked
+    groups = set()
+    for socket in item['sockets']:
+        groups.add(socket['group'])
+    return groups
+
+
+
 class PoeStash:
     # https://pathofexile.gamepedia.com/Public_stash_tab_API#items
 
@@ -182,6 +197,7 @@ class PoeStash:
         self.items = j['items']
         self.chaos_recipe_items = self.get_chaos_recipe_items()
         self.gemcutter_recipe_items = self.get_gemcutter_recipe_items()
+        self.six_socket_items, self.six_link_items = self.get_six_socket_items()
         self.identified_items = self.get_identified_items()
 
     def get_identified_items(self):
@@ -191,6 +207,24 @@ class PoeStash:
                 tag_found(item)
                 items.append(item)
         return items
+
+    def get_six_socket_items(self):
+        six_socket = []
+        six_link = []
+        for item in self.items:
+            if is_tag_found(item):
+                continue
+            if 'sockets' not in item:
+                continue
+            if len(item['sockets']) != 6:
+                continue
+            socket_groups = item_socket_groups(item)
+            if len(socket_groups) == 1:
+                six_link.append(item)
+            else:
+                six_socket.append(item)
+            tag_found(item)
+        return six_socket, six_link
 
     def get_chaos_recipe_items(self):
         """
@@ -427,6 +461,10 @@ def format_identified_items(stash):
         msg += ' + {} more'.format(len(identified) - MAX_SHOWN)
     return msg
 
+def format_six_socket_items(stash):
+    count = len(stash.six_socket_items)
+    msg = '6s: {}'.format(count)
+    return msg
 
 class GemSolver:
 
@@ -563,8 +601,7 @@ def find_gemcutter_needed(stash):
     return GemcutterRecipe(ready=solution, ready_20qual=ready_20qual, total_quality=total_quality, ready_count=ready_count)
 
 def format_gemcutter_recipe(gemcutter_recipe):
-    count = len(gemcutter_recipe.ready) + len(gemcutter_recipe.ready_20qual)
-    msg = 'gcp: {}'.format(count)
+    msg = 'gcp: {}'.format(gemcutter_recipe.ready_count)
     return msg
 
 def find_poe():
