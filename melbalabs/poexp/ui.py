@@ -91,7 +91,7 @@ class Window(QWidget):
             last_chaos_recipe = self.chaos_recipe
             last_gemcutter_recipe = self.gemcutter_recipe
 
-            self.chaos_recipe, self.gemcutter_recipe = self.update_fn()
+            self.chaos_recipe, self.gemcutter_recipe, self.poe_stash = self.update_fn()
 
             if last_chaos_recipe != self.chaos_recipe and self.is_chaos_recipe_ready():
                 # we pulled something from API and it was an actual update
@@ -102,6 +102,8 @@ class Window(QWidget):
                 self.button.setText(BUTTON_READY_TXT)
 
             msg = lib.format_chaos_recipe(self.chaos_recipe, colorize=False)
+            msg += ' | ' + lib.format_gemcutter_recipe(self.gemcutter_recipe)
+            msg += ' | ' + lib.format_identified_items(self.poe_stash)
         except lib.PoeNotFoundException as e:
             msg = 'poe not found, nothing to do'
         except Exception as e:

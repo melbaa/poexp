@@ -9,11 +9,10 @@ import win32api
 import win32gui
 import pyautogui
 
-# TODO stop counting gems as identified items that should be removed from dump tab
+# TODO unknown items shouldn't be part of chaos recipe
 # TODO gemcutter solve use a SMT/SAT solver (z3, pySMT, pySAT)
 # TODO currency stash scan
 # TODO 4 x 6 socket items stash scan. skip 6l
-# TODO remove chaos_recipe identified count. put it somewhere else
 # TODO gemcutter ready_count at info bar on top as `gcp`
 # TODO add gem quality search in the dump tab. eg 20% qual single gem or 40% qual 4 gems ready to sell
 # move to inventory only if worth is >= 2 gcp (usually 8 10% qual gems)
@@ -46,6 +45,8 @@ import pyautogui
 # FEATURE poestash should tag items when it categorizes them, so the uncategorized ones can be counted. eg 'poexp_found' = True
 # FEATURE poestash categorizes items for different recipes
 # FEATURE gemcutter recipe stash scan and clicker
+# FEATURE gems don't count as identified items that should be removed from dump tab
+# FEATURE gcp count in txt bar
 
 txtpath = r"C:\users\melba\desktop\desktop\poerank.txt"
 ACCOUNT = "emfan"
@@ -59,7 +60,7 @@ LEAGUE = "Standard"
 
 SLEEP_SEC = 15  # sec
 
-api_url = "http://api.pathofexile.com/ladders/{league}?accountName={account}"
+league_active_rank_url = "http://api.pathofexile.com/ladders/{league}?accountName={account}"
 prev_next_url = "http://api.pathofexile.com/ladders/{league}?limit=3&offset={offset}"
 
 stash_url = "https://www.pathofexile.com/character-window/get-stash-items?accountName={account}&tabIndex={tabindex}&league={league}&tabs={tabs}"
@@ -114,7 +115,7 @@ ITEM_CHAOS_RECIPE_MULTIPLIER = {
 
 
 ChaosRecipe = collections.namedtuple('ChaosRecipe', [
-    'need', 'unknown', 'identified', 'counts', 'ready', 'ready_count',
+    'need', 'unknown', 'counts', 'ready', 'ready_count',
 ])
 GemcutterRecipe = collections.namedtuple('GemcutterRecipe', [
     'ready', 'ready_20qual', 'total_quality', 'ready_count',
@@ -361,10 +362,6 @@ def find_chaos_recipe_needed(stash):
         for k in CHAOS_RECIPE_ITEM_CLASSES
     }
 
-    identified = []
-    for item in stash.identified_items:
-        identified.append(item['typeLine'])
-
     unknown = []
     for item in stash.chaos_recipe_items:
         category = list(item['category'].keys())[0]
@@ -391,13 +388,13 @@ def find_chaos_recipe_needed(stash):
         adjusted_count = ready_count * ITEM_CHAOS_RECIPE_MULTIPLIER.get(k, 1)
         ready_items[k] = ready_items[k][:adjusted_count]
 
-    return ChaosRecipe(need, unknown, identified, counts, ready_items, ready_count)
+    return ChaosRecipe(need, unknown, counts, ready_items, ready_count)
 
 def format_chaos_recipe(chaos_recipe, colorize: bool):
     # broken with powershell, works with default terminal or conemu
     # not enough colors
 
-    need, unknown, identified, counts, ready_items, ready_count = chaos_recipe
+    need, unknown, counts, ready_items, ready_count = chaos_recipe
 
     need_output = []
     for item in need:
@@ -410,15 +407,25 @@ def format_chaos_recipe(chaos_recipe, colorize: bool):
         for k in CHAOS_RECIPE_ITEM_CLASSES
     }
     chaos_recipe_cli_txt = '''\
-need:{}, unk:{}, id:{} | \
+need:{}, unk:{} | \
 r:{ring:g} a:{amulet:g} b:{belt:g} | \
 h:{helmet:g} b:{boots:g} g:{gloves:g} w:{weapons:g} c:{chest:g}'''.format(
             ', '.join(need_output),
             unknown,
-            identified,
             **adjusted_counts,
     )
     return chaos_recipe_cli_txt
+
+def format_identified_items(stash):
+    MAX_SHOWN = 5
+    identified = []
+    for item in stash.identified_items:
+        identified.append(item['typeLine'])
+    identified_shown = identified[:MAX_SHOWN]
+    msg = 'id: {}'.format(identified_shown)
+    if len(identified) > MAX_SHOWN:
+        msg += ' + {} more'.format(len(identified) - MAX_SHOWN)
+    return msg
 
 
 class GemSolver:
@@ -452,7 +459,6 @@ class GemSolver:
         items = self.items
         candidate_solutions = []
         for item in items:
-            print('candidate_solutions', len(candidate_solutions))
 
            # duplicate existing solutions without the item, so we get combinations without the item
             duplicate_solutions = []
@@ -468,6 +474,7 @@ class GemSolver:
             # start a new candidate solution with this item
             candidate_solutions.append([item])
 
+        print('gemcutter candidate_solutions', len(candidate_solutions))
         return candidate_solutions
 
     def find_min_solution(self):
@@ -555,6 +562,10 @@ def find_gemcutter_needed(stash):
 
     return GemcutterRecipe(ready=solution, ready_20qual=ready_20qual, total_quality=total_quality, ready_count=ready_count)
 
+def format_gemcutter_recipe(gemcutter_recipe):
+    count = len(gemcutter_recipe.ready) + len(gemcutter_recipe.ready_20qual)
+    msg = 'gcp: {}'.format(count)
+    return msg
 
 def find_poe():
 
@@ -577,9 +588,8 @@ def find_poe():
 
 def main2(conf):
     exceptions = []
-    chaos_recipe = None
     POESESSID = conf['poesessid']
-    url = api_url.format(league=LEAGUE, account=ACCOUNT)
+    url = league_active_rank_url.format(league=LEAGUE, account=ACCOUNT)
     resp = requests.get(url)
     j = resp.json()
 
@@ -621,22 +631,21 @@ def main2(conf):
         write_file(txtpath, 'rank unknown')
 
 
-    stash = PoeStash(POESESSID)
-    chaos_recipe = find_chaos_recipe_needed(stash)
+    poe_stash = PoeStash(POESESSID)
+    chaos_recipe = find_chaos_recipe_needed(poe_stash)
     chaos_recipe_txt = format_chaos_recipe(chaos_recipe, colorize=True)
     print(chaos_recipe_txt)
 
-    gemcutter_recipe = find_gemcutter_needed(stash)
-    return chaos_recipe, gemcutter_recipe
+    gemcutter_recipe = find_gemcutter_needed(poe_stash)
+    return chaos_recipe, gemcutter_recipe, poe_stash
 
 
 def run_once(conf):
     chaos_recipe = None
-    if find_poe():
-        chaos_recipe, gemcutter_items = main2(conf)
-    else:
+    if not find_poe():
         raise PoeNotFoundException()
-    return chaos_recipe, gemcutter_items
+    chaos_recipe, gemcutter_items, poe_stash = main2(conf)
+    return chaos_recipe, gemcutter_items, poe_stash
 
 
 def read_conf():
