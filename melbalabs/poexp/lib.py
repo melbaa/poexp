@@ -13,8 +13,7 @@ import pyautogui
 
 # TODO empty dump tab priority. how to free most space: 6s (only 4 to 6 items) -> chaos recipe -> gcp recipe -> currency -> div cards (10 or more)
 # maybe use a generator, so each time + is clicked, move to next type. how to reset on stash update?
-# TODO stash count 6s items, skip 6l
-# TODO click 6s items, skip 6l
+
 # TODO unknown items shouldn't be part of chaos recipe
 # TODO gemcutter solve use a SMT/SAT solver (z3, pySMT, pySAT)
 # TODO currency stash scan
@@ -27,6 +26,7 @@ import pyautogui
 # TODO UI needed items colored like item filter
 
 # -- LOW PRIORITY / NEVER --
+# TODO the stuff that return recipes should return lists of recipes, so it's possible to complete multiple recipes in a single update
 # TODO UI movable window + save state (where it was, its size)
 # TODO make installer with fbs
 # TODO button or hotkey for chaos recipe overlay drawing over inventory screen, disappears after a few sec
@@ -53,6 +53,8 @@ import pyautogui
 # FEATURE gemcutter recipe stash scan and clicker. 20 qual single and 40 qual multi gem
 # FEATURE gems don't count as identified items that should be removed from dump tab
 # FEATURE gcp count in info bar
+# FEATURE stash count 6s and 6l items
+# FEATURE click 6s items, skip 6l
 
 txtpath = r"C:\users\melba\desktop\desktop\poerank.txt"
 ACCOUNT = "emfan"
@@ -125,6 +127,9 @@ ChaosRecipe = collections.namedtuple('ChaosRecipe', [
 ])
 GemcutterRecipe = collections.namedtuple('GemcutterRecipe', [
     'ready', 'ready_20qual', 'total_quality', 'ready_count',
+])
+SixSocketRecipe = collections.namedtuple('SixSocketRecipe', [
+    'ready',
 ])
 
 class LoginException(RuntimeError):
@@ -351,12 +356,22 @@ class StashClicker:
 
 
 
-def move_ready_items_to_inventory(chaos_recipe, gemcutter_recipe):
+def move_ready_items_to_inventory(chaos_recipe, gemcutter_recipe, six_socket_recipe):
+    # the generator yields remaining recipes
 
     stash_clicker = StashClicker()
 
+    # 6s
+    if not is_recipe_ready(six_socket_recipe):
+        print('not enough 6s items')
+    else:
+        for item in six_socket_recipe.ready:
+            stash_clicker.click_item(item)
+        # inventory is likely full at this point
+        yield chaos_recipe, gemcutter_recipe, None
+
     # chaos recipe
-    if not chaos_recipe.ready_count:
+    if not is_recipe_ready(chaos_recipe):
         print ('not enough chaos recipe items to complete recipe')
     else:
         for item_class in CHAOS_RECIPE_ITEM_CLASSES:
@@ -366,7 +381,7 @@ def move_ready_items_to_inventory(chaos_recipe, gemcutter_recipe):
                 stash_clicker.click_item(item)
 
     # gemcutter recipe
-    if not gemcutter_recipe.ready_count:
+    if not is_recipe_ready(gemcutter_recipe):
         print('not enough gemcutter items to complete recipe')
     else:
         for item in gemcutter_recipe.ready_20qual:
@@ -374,6 +389,8 @@ def move_ready_items_to_inventory(chaos_recipe, gemcutter_recipe):
 
         for item in gemcutter_recipe.ready:
             stash_clicker.click_item(item)
+
+    yield None, None, None
 
 
 def find_gcp_needed(stash):
@@ -385,7 +402,7 @@ def find_gcp_needed(stash):
 
 
 def find_chaos_recipe_needed(stash):
-    MAX_NEEDED = 5
+    MAX_NEEDED = 4
     counts = {
         k: 0
         for k in CHAOS_RECIPE_ITEM_CLASSES
@@ -620,8 +637,39 @@ def find_poe():
 
     return found
 
+def find_six_sockets(poe_stash):
+    MIN_ITEMS = 4  # min worth selling
+    MAX_ITEMS = 6  # max to fit in inventory
+    if len(poe_stash.six_socket_items) < MIN_ITEMS:
+        return SixSocketRecipe(ready=[])
+    return SixSocketRecipe(ready=poe_stash.six_socket_items[:MAX_ITEMS])
 
 
+
+def is_recipe_ready(recipe):
+    if not recipe:
+        return False
+
+    if isinstance(recipe, ChaosRecipe):
+        if not recipe.ready_count:
+            return False
+        return True
+
+    if isinstance(recipe, GemcutterRecipe):
+        if not recipe.ready_count:
+            return False
+        return True
+
+    if isinstance(recipe, SixSocketRecipe):
+        return recipe.ready
+
+    raise RuntimeError('unknown recipe type')
+
+def any_recipes_ready(recipes):
+    for recipe in recipes:
+        if is_recipe_ready(recipe):
+            return True
+    return False
 
 def main2(conf):
     exceptions = []
@@ -674,15 +722,16 @@ def main2(conf):
     print(chaos_recipe_txt)
 
     gemcutter_recipe = find_gemcutter_needed(poe_stash)
-    return chaos_recipe, gemcutter_recipe, poe_stash
+    six_socket_recipe = find_six_sockets(poe_stash)
+    return chaos_recipe, gemcutter_recipe, six_socket_recipe, poe_stash
 
 
 def run_once(conf):
     chaos_recipe = None
     if not find_poe():
         raise PoeNotFoundException()
-    chaos_recipe, gemcutter_items, poe_stash = main2(conf)
-    return chaos_recipe, gemcutter_items, poe_stash
+    chaos_recipe, gemcutter_items, six_socket_recipe, poe_stash = main2(conf)
+    return chaos_recipe, gemcutter_items, six_socket_recipe, poe_stash
 
 
 def read_conf():

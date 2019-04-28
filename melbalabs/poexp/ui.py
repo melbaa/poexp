@@ -41,6 +41,9 @@ BUTTON_READY_TXT = '+'
 BUTTON_WAIT_TXT = 'o'
 
 
+
+
+
 class Window(QWidget):
     def __init__(self, update_fn, parent=None):
 
@@ -68,9 +71,13 @@ class Window(QWidget):
 
         self.setLayout(layout)
 
+        # the last_ values are modified only when checking for updates
+        # the self.xxx_recipe values are the state we work on between updates
+        self.last_chaos_recipe = self.chaos_recipe = None
+        self.last_gemcutter_recipe = self.gemcutter_recipe = None
+        self.last_six_socket_recipe = self.six_socket_recipe = None
         self.update_fn = update_fn
-        self.chaos_recipe = None
-        self.gemcutter_recipe = None
+        self.move_items_gen = None
 
         self.timer = QtCore.QTimer(self)
         self.timer.timeout.connect(self.update)
@@ -86,25 +93,37 @@ class Window(QWidget):
         menu.exec_(event.globalPos())
 
     def update(self):
+        # save the last reply from server, use it to compare to new replies
+        # when they are different, it's an update
+
         msg = ''
         try:
-            last_chaos_recipe = self.chaos_recipe
-            last_gemcutter_recipe = self.gemcutter_recipe
+            update_arrived = False
+            chaos_recipe, gemcutter_recipe, six_socket_recipe, poe_stash = self.update_fn()
 
-            self.chaos_recipe, self.gemcutter_recipe, self.poe_stash = self.update_fn()
-
-            if last_chaos_recipe != self.chaos_recipe and self.is_chaos_recipe_ready():
+            if self.last_chaos_recipe != chaos_recipe and lib.is_recipe_ready(chaos_recipe):
                 # we pulled something from API and it was an actual update
                 # we also have enough items
-                self.button.setText(BUTTON_READY_TXT)
+                self.last_chaos_recipe = self.chaos_recipe = chaos_recipe
+                update_arrived = True
 
-            if last_gemcutter_recipe != self.gemcutter_recipe and self.is_gemcutter_recipe_ready():
-                self.button.setText(BUTTON_READY_TXT)
+            if self.last_gemcutter_recipe != gemcutter_recipe and lib.is_recipe_ready(gemcutter_recipe):
+                self.last_gemcutter_recipe = self.gemcutter_recipe = gemcutter_recipe
+                update_arrived = True
 
-            msg = lib.format_chaos_recipe(self.chaos_recipe, colorize=False)
-            msg += ' | ' + lib.format_gemcutter_recipe(self.gemcutter_recipe)
-            msg += ' ' + lib.format_six_socket_items(self.poe_stash)
-            msg += ' | ' + lib.format_identified_items(self.poe_stash)
+            if self.last_six_socket_recipe != six_socket_recipe and lib.is_recipe_ready(six_socket_recipe):
+                self.last_six_socket_recipe = self.six_socket_recipe = six_socket_recipe
+                update_arrived = True
+
+            if update_arrived:
+                self.button.setText(BUTTON_READY_TXT)
+                self.move_items_gen = lib.move_ready_items_to_inventory(
+                    self.chaos_recipe, self.gemcutter_recipe, self.six_socket_recipe)
+
+            msg = lib.format_chaos_recipe(chaos_recipe, colorize=False)
+            msg += ' | ' + lib.format_gemcutter_recipe(gemcutter_recipe)
+            msg += ' ' + lib.format_six_socket_items(poe_stash)
+            msg += ' | ' + lib.format_identified_items(poe_stash)
         except lib.PoeNotFoundException as e:
             msg = 'poe not found, nothing to do'
         except Exception as e:
@@ -113,27 +132,24 @@ class Window(QWidget):
         self.txt.setText(msg)
 
     def click_recipe_items(self):
-        self.button.setText(BUTTON_WAIT_TXT)
-        if not self.is_chaos_recipe_ready() and not self.is_gemcutter_recipe_ready():
+        if not lib.any_recipes_ready([
+            self.chaos_recipe,
+            self.gemcutter_recipe,
+            self.six_socket_recipe,
+        ]):
+            self.button.setText(BUTTON_WAIT_TXT)
             return
-        time.sleep(1)  # give user a chance to stop using the mouse
-        lib.move_ready_items_to_inventory(self.chaos_recipe, self.gemcutter_recipe)
-
-    def is_chaos_recipe_ready(self):
-        if not self.chaos_recipe:
-            return False
-        if not self.chaos_recipe.ready_count:
-            self.txt.setText('not enough items to complete chaos recipe')
-            return False
-        return True
-
-    def is_gemcutter_recipe_ready(self):
-        if not self.gemcutter_recipe:
-            return False
-        if not self.gemcutter_recipe.ready_count:
-            self.txt.setText('not enough items to complete gemcutter recipe')
-            return False
-        return True
+        try:
+            time.sleep(1)  # give user a chance to stop using the mouse
+            self.chaos_recipe, self.gemcutter_recipe, self.six_socket_recipe = next(self.move_items_gen)
+            if not lib.any_recipes_ready([
+                self.chaos_recipe,
+                self.gemcutter_recipe,
+                self.six_socket_recipe,
+            ]):
+                self.button.setText(BUTTON_WAIT_TXT)
+        except StopIteration:
+            self.button.setText(BUTTON_WAIT_TXT)
 
 
 def gui_main():
