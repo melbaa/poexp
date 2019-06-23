@@ -76,6 +76,7 @@ class Window(QWidget):
         self.last_chaos_recipe = self.chaos_recipe = None
         self.last_gemcutter_recipe = self.gemcutter_recipe = None
         self.last_six_socket_recipe = self.six_socket_recipe = None
+        self.last_chromatic_recipe = self.chromatic_recipe = None
         self.update_fn = update_fn
         self.move_items_gen = None
 
@@ -99,7 +100,7 @@ class Window(QWidget):
         msg = ''
         try:
             update_arrived = False
-            chaos_recipe, gemcutter_recipe, six_socket_recipe, poe_stash = self.update_fn()
+            chaos_recipe, gemcutter_recipe, six_socket_recipe, chromatic_recipe, poe_stash = self.update_fn()
 
             if self.last_chaos_recipe != chaos_recipe and lib.is_recipe_ready(chaos_recipe):
                 # we pulled something from API and it was an actual update
@@ -115,10 +116,14 @@ class Window(QWidget):
                 self.last_six_socket_recipe = self.six_socket_recipe = six_socket_recipe
                 update_arrived = True
 
+            if self.last_chromatic_recipe != chromatic_recipe and lib.is_recipe_ready(chromatic_recipe):
+                self.last_chromatic_recipe = self.chromatic_recipe = chromatic_recipe
+                update_arrived = True
+
             if update_arrived:
                 self.button.setText(BUTTON_READY_TXT)
                 self.move_items_gen = lib.move_ready_items_to_inventory(
-                    self.chaos_recipe, self.gemcutter_recipe, self.six_socket_recipe)
+                    self.chaos_recipe, self.gemcutter_recipe, self.six_socket_recipe, self.chromatic_recipe)
 
             msg = lib.format_chaos_recipe(chaos_recipe, colorize=False)
             msg += ' | ' + lib.format_gemcutter_recipe(gemcutter_recipe)
@@ -136,16 +141,18 @@ class Window(QWidget):
             self.chaos_recipe,
             self.gemcutter_recipe,
             self.six_socket_recipe,
+            self.chromatic_recipe,
         ]):
             self.button.setText(BUTTON_WAIT_TXT)
             return
         try:
             time.sleep(1)  # give user a chance to stop using the mouse
-            self.chaos_recipe, self.gemcutter_recipe, self.six_socket_recipe = next(self.move_items_gen)
+            self.chaos_recipe, self.gemcutter_recipe, self.six_socket_recipe, self.chromatic_recipe = next(self.move_items_gen)
             if not lib.any_recipes_ready([
                 self.chaos_recipe,
                 self.gemcutter_recipe,
                 self.six_socket_recipe,
+                self.chromatic_recipe,
             ]):
                 self.button.setText(BUTTON_WAIT_TXT)
         except StopIteration:

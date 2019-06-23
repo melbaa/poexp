@@ -37,3 +37,5 @@ def test_six_socket_items(poestash):
     print(len(poestash.six_socket_items))
     print(len(poestash.six_link_items))
 
+def test_chromatic_items(poestash):
+    print(len(poestash.chromatic_items))
