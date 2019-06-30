@@ -11,9 +11,9 @@ import pyautogui
 
 # NOTE: stash and inventory updates on instance change (self or other player) or after a long timeout
 
-# TODO empty dump tab priority. how to free most space: 6s (only 4 to 6 items) -> chaos recipe -> gcp recipe -> currency -> div cards (10 or more)
-# maybe use a generator, so each time + is clicked, move to next type. how to reset on stash update?
 
+# TODO empty dump tab priority. how to free most space: 6s (only 4 to 6 items) -> chaos recipe -> gcp recipe -> currency -> div cards (10 or more)
+## maybe use a generator, so each time + is clicked, move to next type. how to reset on stash update?
 # TODO unknown items shouldn't be part of chaos recipe
 # TODO pick up div cards from dump tab. only when 10+ stacks
 # TODO pick up maps from dump tab. only when 10+
@@ -23,7 +23,6 @@ import pyautogui
 # TODO 4 x 6 socket items stash scan. skip 6l
 # TODO chaos recipe sounds change based on needed items. create symlinks and use atomic rename
 # See ReplaceFile() and MoveFileEx and use the MOVEFILE_REPLACE_EXISTING and MOVEFILE_WRITE_THROUGH
-# TODO six link items handling? see PoeStash.six_link_items
 # TODO UI show price of exalt, regal, alch, chisel, fusing in chaos (from poe.watch API or poe.ninja or currency.poe.trade)
 # TODO UI show rank
 # TODO UI needed items colored like item filter
@@ -57,7 +56,7 @@ import pyautogui
 # FEATURE gems don't count as identified items that should be removed from dump tab
 # FEATURE gcp count in info bar
 # FEATURE stash count 6s and 6l items
-# FEATURE click 6s items, skip 6l
+# FEATURE six link items handling? see PoeStash.six_link_items; click 6s items, skip 6l
 # FEATURE chromatics items (rgb) should be moved to inventory when 5+. only normal and magic items < 6 sockets
 
 txtpath = r"C:\users\melba\desktop\desktop\poerank.txt"
@@ -393,29 +392,33 @@ class StashClicker:
 
 
 
-def move_ready_items_to_inventory(chaos_recipe, gemcutter_recipe, six_socket_recipe, chromatic_recipe):
-    # the generator yields remaining recipes
+def move_ready_items_to_inventory(recipes):
+    # the generator yields remaining unprocessed recipes
 
     stash_clicker = StashClicker()
+    remaining_recipes = dict(recipes)
 
     # 6s
+    six_socket_recipe = remaining_recipes.pop(SixSocketRecipe, None)
     if not is_recipe_ready(six_socket_recipe):
         print('not enough 6s items')
     else:
         for item in six_socket_recipe.ready:
             stash_clicker.click_item(item)
         # inventory is likely full at this point
-        yield chaos_recipe, gemcutter_recipe, None, chromatic_recipe
+        yield remaining_recipes
 
     # chromatics
+    chromatic_recipe = remaining_recipes.pop(ChromaticRecipe, None)
     if not is_recipe_ready(chromatic_recipe):
         print('not enough chromatic items')
     else:
         for item in chromatic_recipe.ready:
             stash_clicker.click_item(item)
-        yield chaos_recipe, gemcutter_recipe, None, None
+        yield remaining_recipes
 
     # chaos recipe
+    chaos_recipe = remaining_recipes.pop(ChaosRecipe, None)
     if not is_recipe_ready(chaos_recipe):
         print ('not enough chaos recipe items to complete recipe')
     else:
@@ -426,6 +429,7 @@ def move_ready_items_to_inventory(chaos_recipe, gemcutter_recipe, six_socket_rec
                 stash_clicker.click_item(item)
 
     # gemcutter recipe
+    gemcutter_recipe = remaining_recipes.pop(GemcutterRecipe, None)
     if not is_recipe_ready(gemcutter_recipe):
         print('not enough gemcutter items to complete recipe')
     else:
@@ -435,7 +439,7 @@ def move_ready_items_to_inventory(chaos_recipe, gemcutter_recipe, six_socket_rec
         for item in gemcutter_recipe.ready:
             stash_clicker.click_item(item)
 
-    yield None, None, None, None
+    yield remaining_recipes
 
 
 def find_gcp_needed(stash):
@@ -720,7 +724,7 @@ def is_recipe_ready(recipe):
     raise RuntimeError('unknown recipe type')
 
 def any_recipes_ready(recipes):
-    for recipe in recipes:
+    for recipe in recipes.values():
         if is_recipe_ready(recipe):
             return True
     return False
@@ -772,21 +776,27 @@ def main2(conf):
 
     poe_stash = PoeStash(POESESSID)
     chaos_recipe = find_chaos_recipe_needed(poe_stash)
-    chaos_recipe_txt = format_chaos_recipe(chaos_recipe, colorize=True)
+    chaos_recipe_txt = format_chaos_recipe(chaos_recipe, colorize=False)
     print(chaos_recipe_txt)
 
     gemcutter_recipe = find_gemcutter_needed(poe_stash)
     six_socket_recipe = find_six_sockets(poe_stash)
     chromatic_recipe = find_chromatic_items(poe_stash)
-    return chaos_recipe, gemcutter_recipe, six_socket_recipe, chromatic_recipe, poe_stash
+    recipes = {
+        chaos_recipe.__class__: chaos_recipe,
+        gemcutter_recipe.__class__: gemcutter_recipe,
+        six_socket_recipe.__class__: six_socket_recipe,
+        chromatic_recipe.__class__: chromatic_recipe
+    }
+    return recipes, poe_stash
 
 
 def run_once(conf):
     chaos_recipe = None
     if not find_poe():
         raise PoeNotFoundException()
-    chaos_recipe, gemcutter_items, six_socket_recipe, chromatic_recipe, poe_stash = main2(conf)
-    return chaos_recipe, gemcutter_items, six_socket_recipe, chromatic_recipe, poe_stash
+    recipes, poe_stash = main2(conf)
+    return recipes, poe_stash
 
 
 def read_conf():

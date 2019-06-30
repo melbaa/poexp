@@ -13,7 +13,7 @@ def test_stash(conf):
     assert stash.items
 
 def test_main2(conf):
-    chaos_recipe = lib.main2(conf)
+    recipes, poe_stash = lib.main2(conf)
 
 def test_find_chaos_recipe_needed(poestash):
     chaos_recipe = lib.find_chaos_recipe_needed(poestash)
