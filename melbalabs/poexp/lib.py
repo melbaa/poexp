@@ -13,11 +13,12 @@ import pyautogui
 
 
 # TODO empty dump tab priority. how to free most space: 6s (only 4 to 6 items) -> chaos recipe -> gcp recipe -> currency -> div cards (10 or more)
-## maybe use a generator, so each time + is clicked, move to next type. how to reset on stash update?
-# TODO unknown items shouldn't be part of chaos recipe
+# TODO gcp recipe only if chaos recipe is ready. how to implement? some ComboRecipe class?
 # TODO pick up div cards from dump tab. only when 10+ stacks
 # TODO pick up maps from dump tab. only when 10+
 # TODO pick up uniques from dump tab
+# TODO rank in info bar
+# TODO xph estimates for lvl90+ (red/shit, yellow/avg, green/GOOD)
 # TODO gemcutter solve use a SMT/SAT solver (z3, pySMT, pySAT)
 # TODO currency stash scan
 # TODO 4 x 6 socket items stash scan. skip 6l
@@ -58,6 +59,7 @@ import pyautogui
 # FEATURE stash count 6s and 6l items
 # FEATURE six link items handling? see PoeStash.six_link_items; click 6s items, skip 6l
 # FEATURE chromatics items (rgb) should be moved to inventory when 5+. only normal and magic items < 6 sockets
+# FEATURE try to work on lists of recipes instead of enumerating individual ones
 
 txtpath = r"C:\users\melba\desktop\desktop\poerank.txt"
 ACCOUNT = "emfan"
@@ -132,7 +134,7 @@ ITEM_CHAOS_RECIPE_MULTIPLIER = {
 
 
 ChaosRecipe = collections.namedtuple('ChaosRecipe', [
-    'need', 'unknown', 'counts', 'ready', 'ready_count',
+    'need', 'counts', 'ready', 'ready_count',
 ])
 GemcutterRecipe = collections.namedtuple('GemcutterRecipe', [
     'ready', 'ready_20qual', 'total_quality', 'ready_count',
@@ -141,6 +143,9 @@ SixSocketRecipe = collections.namedtuple('SixSocketRecipe', [
     'ready',
 ])
 ChromaticRecipe = collections.namedtuple('ChromaticRecipe', [
+    'ready',
+])
+MapRecipe = collections.namedtuple('MapRecipe', [
     'ready',
 ])
 
@@ -181,6 +186,17 @@ def get_gem_level(item):
             return int(level)
     return 0
 
+def get_map_tier(item):
+    properties = item.get('properties')
+    if not properties:
+        # maps have a tier property
+        return 0
+    for prop in properties:
+        if prop['name'] == 'Map Tier':
+            tier = prop['values'][0][0]  # eg 11
+            return int(tier)
+    return 0
+
 
 POEXP_TAG_FOUND = 'poexp_found'
 
@@ -216,7 +232,21 @@ class PoeStash:
         self.gemcutter_recipe_items = self.get_gemcutter_recipe_items()
         self.six_socket_items, self.six_link_items = self.get_six_socket_items()
         self.chromatic_items = self.get_chromatic_items()
-        self.identified_items = self.get_identified_items()
+        self.map_items = self.get_map_items()
+
+    def get_map_items(self):
+        items = []
+        for item in self.items:
+            if is_tag_found(item):
+                continue
+            category = list(item['category'].keys())[0]
+            if category != 'maps':
+                continue
+            if get_map_tier(item) <= 0:
+                continue
+            tag_found(item)
+            items.append(item)
+        return items
 
     def get_chromatic_items(self):
         items = []
@@ -236,18 +266,16 @@ class PoeStash:
 
             for group in sockets.values():
                 if len(group) >= 3:
+                    tag_found(item)
                     items.append(item)
 
         return items
 
 
-    def get_identified_items(self):
-        items = []
+    def get_untagged_items(self):
         for item in self.items:
-            if item['identified'] and not is_tag_found(item):
-                tag_found(item)
-                items.append(item)
-        return items
+            if not is_tag_found(item):
+                yield item
 
     def get_six_socket_items(self):
         six_socket = []
@@ -428,7 +456,7 @@ def move_ready_items_to_inventory(recipes):
                 item = items[repeat]
                 stash_clicker.click_item(item)
 
-    # gemcutter recipe
+    # gemcutter recipe together with chaos recipe. not worth trading for just 1 gcp
     gemcutter_recipe = remaining_recipes.pop(GemcutterRecipe, None)
     if not is_recipe_ready(gemcutter_recipe):
         print('not enough gemcutter items to complete recipe')
@@ -437,6 +465,16 @@ def move_ready_items_to_inventory(recipes):
             stash_clicker.click_item(item)
 
         for item in gemcutter_recipe.ready:
+            stash_clicker.click_item(item)
+
+    yield remaining_recipes
+
+    # map recipe
+    map_recipe = remaining_recipes.pop(MapRecipe, None)
+    if not is_recipe_ready(map_recipe):
+        print('not enough maps to complete recipe')
+    else:
+        for item in map_recipe.ready:
             stash_clicker.click_item(item)
 
     yield remaining_recipes
@@ -462,7 +500,6 @@ def find_chaos_recipe_needed(stash):
         for k in CHAOS_RECIPE_ITEM_CLASSES
     }
 
-    unknown = []
     for item in stash.chaos_recipe_items:
         category = list(item['category'].keys())[0]
         if category == 'weapons':
@@ -472,9 +509,6 @@ def find_chaos_recipe_needed(stash):
             item_class = item['category'][category][0]
             counts[item_class] += 1
             ready_items[item_class].append(item)
-        else:
-            unknown.append(item)
-            raise RuntimeError('unknown item ' + item)
 
     need = []
     for name, count in counts.items():
@@ -488,13 +522,13 @@ def find_chaos_recipe_needed(stash):
         adjusted_count = ready_count * ITEM_CHAOS_RECIPE_MULTIPLIER.get(k, 1)
         ready_items[k] = ready_items[k][:adjusted_count]
 
-    return ChaosRecipe(need, unknown, counts, ready_items, ready_count)
+    return ChaosRecipe(need, counts, ready_items, ready_count)
 
 def format_chaos_recipe(chaos_recipe, colorize: bool):
     # broken with powershell, works with default terminal or conemu
     # not enough colors
 
-    need, unknown, counts, ready_items, ready_count = chaos_recipe
+    need, counts, ready_items, ready_count = chaos_recipe
 
     need_output = []
     for item in need:
@@ -507,24 +541,23 @@ def format_chaos_recipe(chaos_recipe, colorize: bool):
         for k in CHAOS_RECIPE_ITEM_CLASSES
     }
     chaos_recipe_cli_txt = '''\
-need:{}, unk:{} | \
+need:{} | \
 r:{ring:g} a:{amulet:g} b:{belt:g} | \
 h:{helmet:g} b:{boots:g} g:{gloves:g} w:{weapons:g} c:{chest:g}'''.format(
             ', '.join(need_output),
-            unknown,
             **adjusted_counts,
     )
     return chaos_recipe_cli_txt
 
-def format_identified_items(stash):
+def format_untagged_items(stash):
     MAX_SHOWN = 5
-    identified = []
-    for item in stash.identified_items:
-        identified.append(item['typeLine'])
-    identified_shown = identified[:MAX_SHOWN]
-    msg = 'id: {}'.format(identified_shown)
-    if len(identified) > MAX_SHOWN:
-        msg += ' + {} more'.format(len(identified) - MAX_SHOWN)
+    untagged = []
+    for item in stash.get_untagged_items():
+        untagged.append(item['typeLine'])
+    untagged_shown = untagged[:MAX_SHOWN]
+    msg = 'untagged: {}'.format(untagged_shown)
+    if len(untagged) > MAX_SHOWN:
+        msg += ' + {} more'.format(len(untagged) - MAX_SHOWN)
     return msg
 
 def format_six_socket_items(stash):
@@ -700,6 +733,12 @@ def find_chromatic_items(poe_stash):
         return ChromaticRecipe(ready=[])
     return ChromaticRecipe(ready=poe_stash.chromatic_items[:MAX_ITEMS])
 
+def find_map_items(poe_stash):
+    MIN_ITEMS = 10
+    MAX_ITEMS = 50
+    if len(poe_stash.map_items) < MIN_ITEMS:
+        return MapRecipe(ready=[])
+    return MapRecipe(ready=poe_stash.map_items[:MAX_ITEMS])
 
 def is_recipe_ready(recipe):
     if not recipe:
@@ -719,6 +758,9 @@ def is_recipe_ready(recipe):
         return recipe.ready
 
     if isinstance(recipe, ChromaticRecipe):
+        return recipe.ready
+
+    if isinstance(recipe, MapRecipe):
         return recipe.ready
 
     raise RuntimeError('unknown recipe type')
@@ -782,11 +824,13 @@ def main2(conf):
     gemcutter_recipe = find_gemcutter_needed(poe_stash)
     six_socket_recipe = find_six_sockets(poe_stash)
     chromatic_recipe = find_chromatic_items(poe_stash)
+    map_recipe = find_map_items(poe_stash)
     recipes = {
         chaos_recipe.__class__: chaos_recipe,
         gemcutter_recipe.__class__: gemcutter_recipe,
         six_socket_recipe.__class__: six_socket_recipe,
-        chromatic_recipe.__class__: chromatic_recipe
+        chromatic_recipe.__class__: chromatic_recipe,
+        map_recipe.__class__: map_recipe,
     }
     return recipes, poe_stash
 
