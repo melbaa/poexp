@@ -8,19 +8,18 @@ import colorama
 import win32api
 import win32gui
 import pyautogui
+import cachetools.func
 
 # NOTE: stash and inventory updates on instance change (self or other player) or after a long timeout
 
 
 # TODO empty dump tab priority. how to free most space: 6s (only 4 to 6 items) -> chaos recipe -> gcp recipe -> currency -> div cards (10 or more)
 # TODO gcp recipe only if chaos recipe is ready. how to implement? some ComboRecipe class?
-# TODO pick up div cards from dump tab. only when 10+ stacks
-# TODO pick up maps from dump tab. only when 10+
-# TODO pick up uniques from dump tab
+# TODO find items that are expensive but aren't being sold; find items that are being sold for too much or too little
+# TODO pick up uniques from dump tab. alch recipe. how to know what gives alch shards?
 # TODO rank in info bar
 # TODO xph estimates for lvl90+ (red/shit, yellow/avg, green/GOOD)
 # TODO gemcutter solve use a SMT/SAT solver (z3, pySMT, pySAT)
-# TODO currency stash scan
 # TODO 4 x 6 socket items stash scan. skip 6l
 # TODO chaos recipe sounds change based on needed items. create symlinks and use atomic rename
 # See ReplaceFile() and MoveFileEx and use the MOVEFILE_REPLACE_EXISTING and MOVEFILE_WRITE_THROUGH
@@ -60,6 +59,9 @@ import pyautogui
 # FEATURE six link items handling? see PoeStash.six_link_items; click 6s items, skip 6l
 # FEATURE chromatics items (rgb) should be moved to inventory when 5+. only normal and magic items < 6 sockets
 # FEATURE try to work on lists of recipes instead of enumerating individual ones
+# FEATURE pick up maps from dump tab. only when 10+
+# FEATURE pick up div cards from dump tab. only when 10+ stacks
+# FEATURE currency stash scan. pick up when > 10c
 
 txtpath = r"C:\users\melba\desktop\desktop\poerank.txt"
 ACCOUNT = "emfan"
@@ -73,8 +75,8 @@ ACCOUNT = "emfan"
 #LEAGUE = "Betrayal"
 LEAGUE = "Synthesis"
 LEAGUE = "Synthesis Event (SRE001)"
-LEAGUE = "Standard"
 LEAGUE = 'Legion'
+LEAGUE = "Standard"
 
 
 SLEEP_SEC = 15  # sec
@@ -84,6 +86,8 @@ prev_next_url = "http://api.pathofexile.com/ladders/{league}?limit=3&offset={off
 
 stash_url = "https://www.pathofexile.com/character-window/get-stash-items?accountName={account}&tabIndex={tabindex}&league={league}&tabs={tabs}"
 
+poeninja_currency_prices_url = 'https://poe.ninja/api/Data/GetCurrencyOverview?league={league}'
+poewatch_currency_prices_url = 'https://api.poe.watch/get?category=currency&league={league}'
 
 MAX_QUEUE_LEN = 2000
 BASE_TIME_MEASURE_MINUTES = 15
@@ -147,6 +151,12 @@ ChromaticRecipe = collections.namedtuple('ChromaticRecipe', [
 ])
 MapRecipe = collections.namedtuple('MapRecipe', [
     'ready',
+])
+DivcardRecipe = collections.namedtuple('DivcardRecipe', [
+    'ready',
+])
+CurrencyRecipe = collections.namedtuple('CurrencyRecipe', [
+    'ready', 'total',
 ])
 
 class LoginException(RuntimeError):
@@ -233,6 +243,34 @@ class PoeStash:
         self.six_socket_items, self.six_link_items = self.get_six_socket_items()
         self.chromatic_items = self.get_chromatic_items()
         self.map_items = self.get_map_items()
+        self.divcard_items = self.get_divcard_items()
+        self.currency_items = self.get_currency_items()
+
+    def get_currency_items(self):
+        items = []
+        for item in self.items:
+            if is_tag_found(item):
+                continue
+            category = list(item['category'].keys())[0]
+            if category != 'currency':
+                continue
+            if 'prophecyText' in item:  # it's a prophecy, skip
+                continue
+            tag_found(item)
+            items.append(item)
+        return items
+
+    def get_divcard_items(self):
+        items = []
+        for item in self.items:
+            if is_tag_found(item):
+                continue
+            category = list(item['category'].keys())[0]
+            if category != 'cards':
+                continue
+            tag_found(item)
+            items.append(item)
+        return items
 
     def get_map_items(self):
         items = []
@@ -335,6 +373,27 @@ class PoeStash:
             tag_found(item)
             items.append(item)
         return items
+
+@cachetools.func.ttl_cache()
+def get_currency_prices_poeninja():
+    url = poeninja_currency_prices_url.format(league=LEAGUE)
+    resp = requests.get(url).json()
+    currencies = dict()
+    for currency in resp['lines']:
+        currencies[currency['currencyTypeName']] = currency['chaosEquivalent']
+    currencies['Chaos Orb'] = 1.0
+    return currencies
+
+
+@cachetools.func.ttl_cache()
+def get_currency_prices_poewatch():
+    url = poewatch_currency_prices_url.format(league=LEAGUE.lower())
+    resp = requests.get(url).json()
+    currencies = dict()
+    for currency in resp:
+        currencies[currency['name']] = currency['median']
+    currencies['Chaos Orb'] = 1.0
+    return currencies
 
 
 
@@ -467,7 +526,29 @@ def move_ready_items_to_inventory(recipes):
         for item in gemcutter_recipe.ready:
             stash_clicker.click_item(item)
 
-    yield remaining_recipes
+        yield remaining_recipes
+
+
+
+    # divcard recipe
+    divcard_recipe = remaining_recipes.pop(DivcardRecipe, None)
+    if not is_recipe_ready(divcard_recipe):
+        print('not enough divcards to complete recipe')
+    else:
+        for item in divcard_recipe.ready:
+            stash_clicker.click_item(item)
+
+        yield remaining_recipes
+
+    # currency recipe
+    currency_recipe = remaining_recipes.pop(CurrencyRecipe, None)
+    if not is_recipe_ready(currency_recipe):
+        print('not enough currency to complete recipe')
+    else:
+        for item in currency_recipe.ready:
+            stash_clicker.click_item(item)
+
+        yield remaining_recipes
 
     # map recipe
     map_recipe = remaining_recipes.pop(MapRecipe, None)
@@ -477,7 +558,7 @@ def move_ready_items_to_inventory(recipes):
         for item in map_recipe.ready:
             stash_clicker.click_item(item)
 
-    yield remaining_recipes
+        yield remaining_recipes
 
 
 def find_gcp_needed(stash):
@@ -703,6 +784,11 @@ def format_gemcutter_recipe(gemcutter_recipe):
     msg = 'gcp: {}'.format(gemcutter_recipe.ready_count)
     return msg
 
+def format_currency_recipe(currency_recipe):
+    total = int(round(currency_recipe.total, 0))
+    msg = 'chaos: {}'.format(total)
+    return msg
+
 def find_poe():
 
     def callback(hwnd, hwnds):
@@ -716,7 +802,6 @@ def find_poe():
         title = win32gui.GetWindowText(h).lower()
         if 'exile' in title:
             found = True
-
     return found
 
 def find_six_sockets(poe_stash):
@@ -739,6 +824,27 @@ def find_map_items(poe_stash):
     if len(poe_stash.map_items) < MIN_ITEMS:
         return MapRecipe(ready=[])
     return MapRecipe(ready=poe_stash.map_items[:MAX_ITEMS])
+
+def find_divcard_items(poe_stash):
+    MIN_ITEMS = 15
+    MAX_ITEMS = 40
+    if len(poe_stash.divcard_items) < MIN_ITEMS:
+        return DivcardRecipe(ready=[])
+    return DivcardRecipe(ready=poe_stash.divcard_items[:MAX_ITEMS])
+
+def find_currency_items(poe_stash):
+    MIN_CHAOS = 10
+    # currency_prices = get_currency_prices_poeninja()
+    currency_prices = get_currency_prices_poewatch()
+    total = 0
+    for idx, item in enumerate(poe_stash.currency_items):
+        item_name = item['typeLine']
+        item_count = item['stackSize']
+        price = currency_prices.get(item_name, 0) * item_count
+        total += price
+    if total < MIN_CHAOS:
+        return CurrencyRecipe(ready=[], total=0)
+    return CurrencyRecipe(ready=poe_stash.currency_items, total=total)
 
 def is_recipe_ready(recipe):
     if not recipe:
@@ -763,7 +869,13 @@ def is_recipe_ready(recipe):
     if isinstance(recipe, MapRecipe):
         return recipe.ready
 
-    raise RuntimeError('unknown recipe type')
+    if isinstance(recipe, DivcardRecipe):
+        return recipe.ready
+
+    if isinstance(recipe, CurrencyRecipe):
+        return recipe.ready
+
+    raise RuntimeError('unknown recipe type {}'.format(recipe.__class__))
 
 def any_recipes_ready(recipes):
     for recipe in recipes.values():
@@ -825,12 +937,16 @@ def main2(conf):
     six_socket_recipe = find_six_sockets(poe_stash)
     chromatic_recipe = find_chromatic_items(poe_stash)
     map_recipe = find_map_items(poe_stash)
+    divcard_recipe = find_divcard_items(poe_stash)
+    currency_recipe = find_currency_items(poe_stash)
     recipes = {
         chaos_recipe.__class__: chaos_recipe,
         gemcutter_recipe.__class__: gemcutter_recipe,
         six_socket_recipe.__class__: six_socket_recipe,
         chromatic_recipe.__class__: chromatic_recipe,
         map_recipe.__class__: map_recipe,
+        divcard_recipe.__class__: divcard_recipe,
+        currency_recipe.__class__: currency_recipe,
     }
     return recipes, poe_stash
 

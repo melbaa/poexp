@@ -114,8 +114,10 @@ class Window(QWidget):
 
             chaos_recipe = recipes[lib.ChaosRecipe]
             gemcutter_recipe = recipes[lib.GemcutterRecipe]
+            currency_recipe = recipes[lib.CurrencyRecipe]
             msg = lib.format_chaos_recipe(chaos_recipe, colorize=False)
             msg += ' | ' + lib.format_gemcutter_recipe(gemcutter_recipe)
+            msg += ' ' + lib.format_currency_recipe(currency_recipe)
             # msg += ' ' + lib.format_six_socket_items(poe_stash)
             msg += ' | ' + lib.format_untagged_items(poe_stash)
         except lib.PoeNotFoundException as e:

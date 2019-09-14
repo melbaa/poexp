@@ -42,3 +42,14 @@ def test_chromatic_items(poestash):
 
 def test_map_items(poestash):
     print(len(poestash.map_items))
+
+def test_divcard_items(poestash):
+    print(len(poestash.divcard_items))
+    import pdb;pdb.set_trace()
+
+def test_currency_items(poestash):
+    print(len(poestash.currency_items))
+    items = lib.find_currency_items(poestash)
+    import pdb;pdb.set_trace()
+
+
