@@ -12,11 +12,18 @@ def test_stash(conf):
     stash = lib.PoeStash(conf['poesessid'])
     assert stash.items
 
+def test_stash_filter(poestash):
+    untagged = poestash.get_untagged_items()
+    for item in untagged:
+        print(item)
+        print()
+
 def test_main2(conf):
     recipes, poe_stash = lib.main2(conf)
 
 def test_find_chaos_recipe_needed(poestash):
     chaos_recipe = lib.find_chaos_recipe_needed(poestash)
+    print(chaos_recipe)
 
 @pytest.mark.skip(reason='need to update with gem recipe, how to test clicks')
 def test_click(conf, chaos_recipe):
@@ -50,6 +57,7 @@ def test_divcard_items(poestash):
 def test_currency_items(poestash):
     print(len(poestash.currency_items))
     items = lib.find_currency_items(poestash)
-    import pdb;pdb.set_trace()
 
-
+def test_find_poe():
+    poe_found, poe_title = lib.find_poe()
+    print(poe_found, poe_title)

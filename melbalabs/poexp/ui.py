@@ -23,6 +23,9 @@ import melbalabs.poexp.lib as lib
 # https://build-system.fman.io/ fbs installer
 # http://doc.qt.io/qt-5/qguiapplication.html#quitOnLastWindowClosed-prop
 # http://doc.qt.io/qt-5/qpainter.html#details
+# https://doc.qt.io/qt-5/qlabel.html#details
+# https://doc.qt.io/qt-5/richtext-html-subset.html
+## <span style="background-color:red;">00</span>-<span style="background-color:blue;">01</span>-02-03-04-05
 
 """
 on + click, open a new window, paint rectangles of chaos items on a click through window
@@ -115,7 +118,7 @@ class Window(QWidget):
             chaos_recipe = recipes[lib.ChaosRecipe]
             gemcutter_recipe = recipes[lib.GemcutterRecipe]
             currency_recipe = recipes[lib.CurrencyRecipe]
-            msg = lib.format_chaos_recipe(chaos_recipe, colorize=False)
+            msg = lib.format_chaos_recipe(chaos_recipe, colorize=lib.Colorize.GUI)
             msg += ' | ' + lib.format_gemcutter_recipe(gemcutter_recipe)
             msg += ' ' + lib.format_currency_recipe(currency_recipe)
             # msg += ' ' + lib.format_six_socket_items(poe_stash)

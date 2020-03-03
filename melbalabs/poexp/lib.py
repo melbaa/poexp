@@ -1,7 +1,9 @@
+import re
 import time
 import traceback
 import collections
 import json
+import enum
 
 import requests
 import colorama
@@ -12,20 +14,33 @@ import cachetools.func
 
 # NOTE: stash and inventory updates on instance change (self or other player) or after a long timeout
 
+# item data files
+# https://github.com/siegrest/poewatch/blob/master/src/main/resources/item_bases.json
+# https://github.com/siegrest/poewatch/blob/master/src/main/resources/default_maps.json
+# https://github.com/siegrest/poewatch/blob/master/src/main/resources/unique_maps.json
+# https://github.com/brather1ng/RePoE/tree/master/data (2019-09-14 12:40 no map data)
+# https://github.com/PoE-TradeMacro/POE-TradeMacro/blob/master/data/Uniques.txt
+# https://github.com/PoE-TradeMacro/POE-TradeMacro/blob/master/data/item_bases.json
+# https://github.com/PoE-TradeMacro/POE-TradeMacro/blob/master/data/item_bases_armour.json
+# https://github.com/PoE-TradeMacro/POE-TradeMacro/blob/master/data/item_bases_weapon.json
+# https://github.com/aRTy42/scrape_poe_info
+# https://github.com/EmmittJ/PoESkillTree/blob/master/WPFSKillTree/Data/Equipment/Uniques.xml
+# https://github.com/Openarl/PathOfBuilding/tree/master/Data (2019-09-14 12:45 shitty format, lua)
+# https://github.com/poe-world/poe-world-resources/blob/master/maps.json (2019-09-14 12:43 outdated)
 
+# TODO check if inventory has space before moving things to it
 # TODO empty dump tab priority. how to free most space: 6s (only 4 to 6 items) -> chaos recipe -> gcp recipe -> currency -> div cards (10 or more)
 # TODO gcp recipe only if chaos recipe is ready. how to implement? some ComboRecipe class?
 # TODO find items that are expensive but aren't being sold; find items that are being sold for too much or too little
+# TODO get_currency_items skips a bunch of currencies that don't fit in currency tab. what to do?
 # TODO pick up uniques from dump tab. alch recipe. how to know what gives alch shards?
 # TODO rank in info bar
-# TODO xph estimates for lvl90+ (red/shit, yellow/avg, green/GOOD)
+# TODO xph estimates for lvl90+ (red/bad, yellow/avg, green/GOOD)
 # TODO gemcutter solve use a SMT/SAT solver (z3, pySMT, pySAT)
-# TODO 4 x 6 socket items stash scan. skip 6l
 # TODO chaos recipe sounds change based on needed items. create symlinks and use atomic rename
 # See ReplaceFile() and MoveFileEx and use the MOVEFILE_REPLACE_EXISTING and MOVEFILE_WRITE_THROUGH
 # TODO UI show price of exalt, regal, alch, chisel, fusing in chaos (from poe.watch API or poe.ninja or currency.poe.trade)
 # TODO UI show rank
-# TODO UI needed items colored like item filter
 
 # -- LOW PRIORITY / NEVER --
 # TODO the stuff that return recipes should return lists of recipes, so it's possible to complete multiple recipes in a single update
@@ -41,11 +56,12 @@ import cachetools.func
 # FEATURE UI shows needed/missing items to complete eg. 5 chaos recipes
 # FEATURE UI chaos recipe button moves 1 completed recipe to inventory
 # basically does item sorting for you
-# FEATURE UI chaos recipe button becomes + only if there's enough items AND there are enough
+# note: only tested on 1920x1080 screen resolution when game is windowed
+# FEATURE UI chaos recipe button becomes '+' only if there's enough items AND there are enough
 # stash items after an API update. In other words, the + should clear after
 # it was clicked until an API update (small unavoidable race condition - API updates
 # while chaos items are being moved out of stash tab for a recipe leading to incorrect counts)
-# FEATURE UI button becomes o when clicked to show we are waiting for an API update with new items
+# FEATURE UI button becomes 'o' when clicked to show we are waiting for an API update with new items
 # FEATURE UI warning when dump tab contains some unknown and identified items
 # FEATURE UI always on top
 # FEATURE UI right click quit menu
@@ -53,6 +69,7 @@ import cachetools.func
 # FEATURE poestash should tag items when it categorizes them, so the uncategorized ones can be counted. eg 'poexp_found' = True
 # FEATURE poestash categorizes items for different recipes
 # FEATURE gemcutter recipe stash scan and clicker. 20 qual single and 40 qual multi gem
+# skips enlighten, empower, enhance, because they are expensive
 # FEATURE gems don't count as identified items that should be removed from dump tab
 # FEATURE gcp count in info bar
 # FEATURE stash count 6s and 6l items
@@ -62,9 +79,12 @@ import cachetools.func
 # FEATURE pick up maps from dump tab. only when 10+
 # FEATURE pick up div cards from dump tab. only when 10+ stacks
 # FEATURE currency stash scan. pick up when > 10c
+# FEATURE start using STASH_FRAME_TYPE for filtering items. the `category` property is gone
+# FEATURE use item icons for filtering items. the category property is gone
+# FEATURE color UI needed items in different colors, similar to filter
 
 txtpath = r"C:\users\melba\desktop\desktop\poerank.txt"
-ACCOUNT = "emfan"
+ACCOUNT = "chris"
 
 
 # see active leagues with http://api.pathofexile.com/leagues
@@ -77,6 +97,7 @@ LEAGUE = "Synthesis"
 LEAGUE = "Synthesis Event (SRE001)"
 LEAGUE = 'Legion'
 LEAGUE = "Standard"
+LEAGUE = 'Metamorph'
 
 
 SLEEP_SEC = 15  # sec
@@ -110,7 +131,9 @@ xp_per_level = {
     99: 4250334444,
 }
 
-CHAOS_RECIPE_ITEM_CLASSES = [
+
+
+CHAOS_RECIPE_ITEM_CATEGORIES = [
     'helmet',
     'boots',
     'gloves',
@@ -121,6 +144,12 @@ CHAOS_RECIPE_ITEM_CLASSES = [
     'chest',
 ]
 
+class Colorize(enum.Enum):
+    NOTHING = enum.auto()
+    CLI = enum.auto()
+    GUI = enum.auto()
+
+
 ITEM_COLORS_CLI = {
     'helmet': colorama.Fore.BLUE,
     'boots': colorama.Fore.CYAN,
@@ -130,6 +159,17 @@ ITEM_COLORS_CLI = {
     'belt': colorama.Fore.GREEN,
     'weapons': colorama.Fore.RED,
     'chest': colorama.Fore.RED,
+}
+
+ITEM_COLORS_GUI = {
+    'helmet': 'blue',
+    'boots': 'aqua',
+    'gloves': 'yellow',
+    'ring': 'green',
+    'amulet': 'green',
+    'belt': 'green',
+    'weapons': 'orange',
+    'chest': 'red',
 }
 
 ITEM_CHAOS_RECIPE_MULTIPLIER = {
@@ -209,6 +249,7 @@ def get_map_tier(item):
 
 
 POEXP_TAG_FOUND = 'poexp_found'
+POEXP_CATEGORIES = 'poexp_cat'
 
 def tag_found(item):
     item[POEXP_TAG_FOUND] = True
@@ -216,6 +257,10 @@ def tag_found(item):
 def is_tag_found(item):
     return item.get(POEXP_TAG_FOUND)
 
+def is_six_socket_item(item):
+    if 'sockets' in item and len(item['sockets']) == 6:
+        return True
+    return False
 
 def item_socket_groups(item):
     # if there's only 1 group, the item is fully linked
@@ -223,7 +268,6 @@ def item_socket_groups(item):
     for socket in item['sockets']:
         groups.add(socket['group'])
     return groups
-
 
 
 class PoeStash:
@@ -238,6 +282,7 @@ class PoeStash:
             raise LoginException(j['error']['message'])
         self.raw = j
         self.items = j['items']
+        self.categorize_items()
         self.chaos_recipe_items = self.get_chaos_recipe_items()
         self.gemcutter_recipe_items = self.get_gemcutter_recipe_items()
         self.six_socket_items, self.six_link_items = self.get_six_socket_items()
@@ -246,13 +291,65 @@ class PoeStash:
         self.divcard_items = self.get_divcard_items()
         self.currency_items = self.get_currency_items()
 
+
+    def categorize_items(self):
+        # v1 upstream json had item['category']
+        # v2 use item['icon']
+        # alternative use typeLine with poewatch data or own list
+        # alternative use RePoe data dumps from the game client
+        # alternative use frameRype for some things
+
+        for item in self.items:
+            item[POEXP_CATEGORIES] = set()
+            re_match = re.search('/2DItems/(Belts|Rings|Amulets|Weapons|Armours/Helmets|Armours/Gloves|Armours/Boots|Armours/BodyArmours|Maps|Currency/Breach|Currency/Incubation|Currency/Scarabs|Currency|Gems|Divination)/', item['icon'])
+            if not re_match:
+                continue
+
+            if re_match.group(1) == 'Belts':
+                item[POEXP_CATEGORIES] = {'belt', 'accessory'}
+            elif re_match.group(1) == 'Rings':
+                item[POEXP_CATEGORIES] = {'ring', 'accessory'}
+            elif re_match.group(1) == 'Amulets':
+                item[POEXP_CATEGORIES] = {'amulet', 'accessory'}
+            elif re_match.group(1) == 'Armours/Boots':
+                item[POEXP_CATEGORIES] = {'boots', 'armour'}
+            elif re_match.group(1) == 'Armours/BodyArmours':
+                item[POEXP_CATEGORIES] = {'body', 'chest', 'armour'}
+            elif re_match.group(1) == 'Armours/Helmets':
+                item[POEXP_CATEGORIES] = {'helmet', 'armour'}
+            elif re_match.group(1) == 'Armours/Gloves':
+                item[POEXP_CATEGORIES] = {'gloves', 'armour'}
+            elif re_match.group(1) == 'Weapons':
+                item[POEXP_CATEGORIES] = {'weapons', 'armour'}
+            elif re_match.group(1) == 'Maps':
+                item[POEXP_CATEGORIES] = {'map'}
+            elif re_match.group(1) == 'Currency/Incubation':
+                item[POEXP_CATEGORIES] = {'currency', 'incubation'}
+            elif re_match.group(1) == 'Currency/Scarabs':
+                item[POEXP_CATEGORIES] = {'currency', 'scarabs'}
+            elif re_match.group(1) == 'Currency/Breach':
+                item[POEXP_CATEGORIES] = {'currency', 'breach'}
+            elif re_match.group(1) == 'Currency':
+                item[POEXP_CATEGORIES] = {'currency'}
+            elif re_match.group(1) == 'Gems':
+                item[POEXP_CATEGORIES] = {'gem'}
+            elif re_match.group(1) == 'Divination':
+                item[POEXP_CATEGORIES] = {'divcard'}
+            else:
+                raise RuntimeError('unknown category')
+
     def get_currency_items(self):
         items = []
         for item in self.items:
             if is_tag_found(item):
                 continue
-            category = list(item['category'].keys())[0]
-            if category != 'currency':
+            if 'currency' not in item[POEXP_CATEGORIES]:
+                continue
+            if 'incubation' in item[POEXP_CATEGORIES]:
+                continue
+            if 'scarabs' in item[POEXP_CATEGORIES]:
+                continue
+            if 'breach' in item[POEXP_CATEGORIES]:
                 continue
             if 'prophecyText' in item:  # it's a prophecy, skip
                 continue
@@ -265,8 +362,7 @@ class PoeStash:
         for item in self.items:
             if is_tag_found(item):
                 continue
-            category = list(item['category'].keys())[0]
-            if category != 'cards':
+            if 'divcard' not in item[POEXP_CATEGORIES]:
                 continue
             tag_found(item)
             items.append(item)
@@ -277,10 +373,10 @@ class PoeStash:
         for item in self.items:
             if is_tag_found(item):
                 continue
-            category = list(item['category'].keys())[0]
-            if category != 'maps':
+            if 'map' not in item[POEXP_CATEGORIES]:
                 continue
             if get_map_tier(item) <= 0:
+                # ignore sac fragment
                 continue
             tag_found(item)
             items.append(item)
@@ -321,9 +417,7 @@ class PoeStash:
         for item in self.items:
             if is_tag_found(item):
                 continue
-            if 'sockets' not in item:
-                continue
-            if len(item['sockets']) != 6:
+            if not is_six_socket_item(item):
                 continue
             socket_groups = item_socket_groups(item)
             if len(socket_groups) == 1:
@@ -340,12 +434,17 @@ class PoeStash:
         """
         items = []
         for item in self.items:
+            if item['frameType'] != STASH_FRAME_TYPE['rare']:
+                continue
             if item['identified']:
                 continue
-            category = list(item['category'].keys())[0]
-            if category not in {'weapons', 'accessories', 'armour'}:
+            if is_six_socket_item(item):
                 continue
-            if item['frameType'] != STASH_FRAME_TYPE['rare']:
+
+            for category in {'accessory', 'armour', 'weapon'}:
+                if category in item[POEXP_CATEGORIES]:
+                    break
+            else:
                 continue
             tag_found(item)
             items.append(item)
@@ -358,9 +457,9 @@ class PoeStash:
         """
         items = []
         for item in self.items:
-            category = list(item['category'].keys())[0]
-            if category != 'gems':
+            if 'gem' not in item[POEXP_CATEGORIES]:
                 continue
+            # don't want to vendor expensive gems
             if item['typeLine'] in {'Enlighten Support', 'Empower Support', 'Enhance Support'}:
                 continue
             quality = get_quality(item)
@@ -471,7 +570,7 @@ class StashClicker:
     def click_item(self, item):
         x = self.x_start + self.quad_tab_box_pixels_x * (item['x'])
         y = self.y_start + self.quad_tab_box_pixels_y * (item['y'])
-        print('mouse move to', x, y, item['x'], item['y'], item['category'])
+        print('mouse move to', x, y, item['x'], item['y'], item[POEXP_CATEGORIES])
         pyautogui.moveTo(x, y)
         pyautogui.keyDown('ctrl')
         pyautogui.click()
@@ -484,6 +583,22 @@ def move_ready_items_to_inventory(recipes):
 
     stash_clicker = StashClicker()
     remaining_recipes = dict(recipes)
+
+    # gcp when 6s or chaos recipe
+    if (is_recipe_ready(remaining_recipes.get(SixSocketRecipe))
+    or is_recipe_ready(remaining_recipes.get(ChaosRecipe))):
+        # gemcutter recipe together with chaos recipe. not worth trading for just 1 gcp
+        gemcutter_recipe = remaining_recipes.pop(GemcutterRecipe, None)
+        if not is_recipe_ready(gemcutter_recipe):
+            print('not enough gemcutter items to complete recipe')
+        else:
+            for item in gemcutter_recipe.ready_20qual:
+                stash_clicker.click_item(item)
+
+            for item in gemcutter_recipe.ready:
+                stash_clicker.click_item(item)
+
+
 
     # 6s
     six_socket_recipe = remaining_recipes.pop(SixSocketRecipe, None)
@@ -509,24 +624,14 @@ def move_ready_items_to_inventory(recipes):
     if not is_recipe_ready(chaos_recipe):
         print ('not enough chaos recipe items to complete recipe')
     else:
-        for item_class in CHAOS_RECIPE_ITEM_CLASSES:
-            for repeat in range(ITEM_CHAOS_RECIPE_MULTIPLIER.get(item_class, 1)):
-                items = chaos_recipe.ready[item_class]
+
+        for item_category in CHAOS_RECIPE_ITEM_CATEGORIES:
+            for repeat in range(ITEM_CHAOS_RECIPE_MULTIPLIER.get(item_category, 1)):
+                items = chaos_recipe.ready[item_category]
                 item = items[repeat]
                 stash_clicker.click_item(item)
-
-    # gemcutter recipe together with chaos recipe. not worth trading for just 1 gcp
-    gemcutter_recipe = remaining_recipes.pop(GemcutterRecipe, None)
-    if not is_recipe_ready(gemcutter_recipe):
-        print('not enough gemcutter items to complete recipe')
-    else:
-        for item in gemcutter_recipe.ready_20qual:
-            stash_clicker.click_item(item)
-
-        for item in gemcutter_recipe.ready:
-            stash_clicker.click_item(item)
-
         yield remaining_recipes
+
 
 
 
@@ -570,26 +675,30 @@ def find_gcp_needed(stash):
 
 
 def find_chaos_recipe_needed(stash):
-    MAX_NEEDED = 4
+    # return a chaos recipe, which shows how many of each item there is and how many recipes are ready
+    # two things to do:
+    # * gather a list of ready recipes
+    # * show how many items are needed to complete at least MAX_NEEDED recipes
+    MAX_NEEDED = 2
+
+    # category -> count of items of that category found in stash
     counts = {
         k: 0
-        for k in CHAOS_RECIPE_ITEM_CLASSES
+        for k in CHAOS_RECIPE_ITEM_CATEGORIES
     }
 
+    # category -> list of items of that category found in stash
     ready_items = {
         k: []
-        for k in CHAOS_RECIPE_ITEM_CLASSES
+        for k in CHAOS_RECIPE_ITEM_CATEGORIES
     }
 
     for item in stash.chaos_recipe_items:
-        category = list(item['category'].keys())[0]
-        if category == 'weapons':
-            counts[category] += 1
-            ready_items[category].append(item)
-        elif category in {'accessories', 'armour'}:
-            item_class = item['category'][category][0]
-            counts[item_class] += 1
-            ready_items[item_class].append(item)
+        for item_category in CHAOS_RECIPE_ITEM_CATEGORIES:
+            if item_category in item[POEXP_CATEGORIES]:
+                counts[item_category] += 1
+                ready_items[item_category].append(item)
+                break
 
     need = []
     for name, count in counts.items():
@@ -597,29 +706,32 @@ def find_chaos_recipe_needed(stash):
             need.append(name)
 
     ready_count = min(
-        len(ready_items[k]) // ITEM_CHAOS_RECIPE_MULTIPLIER.get(k, 1) for k in CHAOS_RECIPE_ITEM_CLASSES
+        len(ready_items[k]) // ITEM_CHAOS_RECIPE_MULTIPLIER.get(k, 1) for k in CHAOS_RECIPE_ITEM_CATEGORIES
     )
-    for k in CHAOS_RECIPE_ITEM_CLASSES:
+    for k in CHAOS_RECIPE_ITEM_CATEGORIES:
         adjusted_count = ready_count * ITEM_CHAOS_RECIPE_MULTIPLIER.get(k, 1)
         ready_items[k] = ready_items[k][:adjusted_count]
 
     return ChaosRecipe(need, counts, ready_items, ready_count)
 
-def format_chaos_recipe(chaos_recipe, colorize: bool):
+def format_chaos_recipe(chaos_recipe, colorize: Colorize):
     # broken with powershell, works with default terminal or conemu
     # not enough colors
+
 
     need, counts, ready_items, ready_count = chaos_recipe
 
     need_output = []
     for item in need:
-        if item in ITEM_COLORS_CLI and colorize:
+        if colorize == Colorize.CLI and item in ITEM_COLORS_CLI:
             item = ITEM_COLORS_CLI[item] + item + colorama.Style.RESET_ALL
+        elif colorize == Colorize.GUI and item in ITEM_COLORS_GUI:
+            item = '<span style="background-color:{color};">{item}</span>'.format(color=ITEM_COLORS_GUI[item], item=item)
         need_output.append(item)
 
     adjusted_counts = {
         k: counts[k] / ITEM_CHAOS_RECIPE_MULTIPLIER.get(k, 1)
-        for k in CHAOS_RECIPE_ITEM_CLASSES
+        for k in CHAOS_RECIPE_ITEM_CATEGORIES
     }
     chaos_recipe_cli_txt = '''\
 need:{} | \
@@ -704,7 +816,7 @@ class GemSolver:
                 best = solution
                 break
         else:
-            return None
+            return []
 
         for solution in solutions:
             if self.is_solution(solution):
@@ -753,7 +865,8 @@ def find_gemcutter_needed(stash):
 
     QUALITY_PERFECT = 20
     QUALITY_NEEDED = 40
-    NUM_ITEMS_MAX = 4
+    QUALITY_PER_GEM = 4  # we have configured filter to show 5+ qual gems
+    NUM_ITEMS_MAX = QUALITY_NEEDED/QUALITY_PER_GEM
     total_quality = 0
     ready_count = 0
     ready_20qual = []
@@ -790,19 +903,19 @@ def format_currency_recipe(currency_recipe):
     return msg
 
 def find_poe():
+    """ returns found: bool, title: str """
 
     def callback(hwnd, hwnds):
         hwnds.append(hwnd)
         return True
 
-    found = False
     hwnds = []
     win32gui.EnumWindows(callback, hwnds)
     for h in hwnds:
         title = win32gui.GetWindowText(h).lower()
         if 'exile' in title:
-            found = True
-    return found
+            return True, title
+    return False, ''
 
 def find_six_sockets(poe_stash):
     MIN_ITEMS = 5  # min worth selling
@@ -819,27 +932,27 @@ def find_chromatic_items(poe_stash):
     return ChromaticRecipe(ready=poe_stash.chromatic_items[:MAX_ITEMS])
 
 def find_map_items(poe_stash):
-    MIN_ITEMS = 10
+    MIN_ITEMS = 5
     MAX_ITEMS = 50
     if len(poe_stash.map_items) < MIN_ITEMS:
         return MapRecipe(ready=[])
     return MapRecipe(ready=poe_stash.map_items[:MAX_ITEMS])
 
 def find_divcard_items(poe_stash):
-    MIN_ITEMS = 15
-    MAX_ITEMS = 40
+    MIN_ITEMS = 40
+    MAX_ITEMS = 50
     if len(poe_stash.divcard_items) < MIN_ITEMS:
         return DivcardRecipe(ready=[])
     return DivcardRecipe(ready=poe_stash.divcard_items[:MAX_ITEMS])
 
 def find_currency_items(poe_stash):
-    MIN_CHAOS = 10
+    MIN_CHAOS = 150
     # currency_prices = get_currency_prices_poeninja()
     currency_prices = get_currency_prices_poewatch()
     total = 0
     for idx, item in enumerate(poe_stash.currency_items):
         item_name = item['typeLine']
-        item_count = item['stackSize']
+        item_count = item.get('stackSize', 1)  # not all currency is stackable
         price = currency_prices.get(item_name, 0) * item_count
         total += price
     if total < MIN_CHAOS:
@@ -930,7 +1043,7 @@ def main2(conf):
 
     poe_stash = PoeStash(POESESSID)
     chaos_recipe = find_chaos_recipe_needed(poe_stash)
-    chaos_recipe_txt = format_chaos_recipe(chaos_recipe, colorize=False)
+    chaos_recipe_txt = format_chaos_recipe(chaos_recipe, colorize=Colorize.NOTHING)
     print(chaos_recipe_txt)
 
     gemcutter_recipe = find_gemcutter_needed(poe_stash)
@@ -953,7 +1066,8 @@ def main2(conf):
 
 def run_once(conf):
     chaos_recipe = None
-    if not find_poe():
+    poe_found, poe_title = find_poe()
+    if not poe_found:
         raise PoeNotFoundException()
     recipes, poe_stash = main2(conf)
     return recipes, poe_stash
